@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN" data-embedded="true">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Higgsfield 会员渠道管理</title><link rel="stylesheet" href="./dashboard.css"></head>
+<body data-embedded="true"><main id="dashboard" class="hf-workspace">
+<nav class="hf-tabs" aria-label="Higgsfield 应用导航">
+  <button data-route="overview">概览</button><button data-route="log">日志</button>
+</nav>
+<nav id="breadcrumb" class="hf-breadcrumb" aria-label="面包屑" hidden><button class="hf-button" data-route="overview">Higgsfield</button><span aria-hidden="true">/</span><span id="breadcrumbPage"></span></nav>
+<div id="message" class="hf-notice" role="status">正在读取渠道状态…</div>
+<button id="reload" class="hf-button">重新读取</button>
+<div id="business" hidden>
+<section data-page="overview">
+  <div class="hf-title-row"><div><h2>账号概览</h2><p class="hf-muted">查看会员套餐、Credits 与授权状态。</p></div><button class="hf-button primary" data-route="accounts/new">＋ 连接会员</button></div>
+  <form id="accountFilters" class="hf-toolbar"><label class="hf-search">搜索账号<input id="accountSearch" placeholder="搜索账号"></label><label>账号状态<select id="accountFilter"><option value="">全部状态</option><option value="active">启用</option><option value="disabled">禁用</option></select></label><button class="hf-button" type="submit">查询</button></form>
+  <p id="accountEmpty" class="hf-state" hidden>没有匹配的账号。调整筛选或连接会员。</p>
+  <article id="accountCard" class="hf-panel">
+    <div class="hf-title-row"><div><h2><span id="accountName"></span> <span id="accountStatus" class="hf-tag" role="status"></span></h2><p class="hf-muted"><span id="authState"></span> · 固定出口</p></div><div class="hf-title-actions">
+    <button id="accountRefresh" class="hf-button hf-icon" title="更新" aria-label="更新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6"/></svg></button>
+    <button id="accountEdit" class="hf-button hf-icon" title="编辑" aria-label="编辑"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-12 12-6 1 1-6ZM13 6l5 5"/></svg></button>
+    <button id="accountToggle" class="hf-button hf-icon" title="禁用账号" aria-label="禁用账号"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v9M6 5a9 9 0 1 0 12 0"/></svg></button>
+    <button id="accountDelete" class="hf-button hf-icon" title="删除" aria-label="删除"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button>
+    </div></div>
+    <p id="disabledNote" class="hf-muted" hidden>账号已禁用，不接收新任务；已有任务可查询和恢复，历史日志保留。</p>
+    <div class="hf-membership"><div><small>会员等级</small><strong id="membershipTier"></strong><small id="membershipPrice"></small></div><div><small>剩余积分</small><strong id="membershipCredits"></strong><small id="membershipQuota"></small></div><div><small>会员到期</small><strong id="membershipExpiry"></strong></div><div><small>套餐并发额度</small><strong id="membershipConcurrency"></strong></div></div>
+    <p class="hf-muted">官网总余额：<span id="providerBalance"></span><span id="balanceStale"></span></p>
+    <div class="hf-title-row"><p class="hf-muted" id="generationState"></p><button class="hf-button" data-route="accounts/new">连接／恢复授权</button></div>
+  </article>
+</section>
+<section data-page="account" hidden><h2 tabindex="-1" id="accountEditorTitle">编辑账号</h2>
+<form id="accountForm" class="hf-panel hf-spacing"><div class="hf-form-grid">
+<label>显示名称<input name="name" maxlength="200" placeholder="留空自动命名"></label>
+<label>会员等级<input name="membership_tier" maxlength="2000" placeholder="未登记"></label>
+<label>剩余积分（Credits）<input name="remaining_credits" type="number" min="0" step="any" placeholder="未登记"></label>
+<label>月度配额（Credits）<input name="monthly_credits" type="number" min="0" step="any" placeholder="未登记"></label>
+<label>月度订阅价格（USD）<input name="monthly_price_usd" type="number" min="0" step="0.01" placeholder="未登记"></label>
+<label>会员到期<input name="membership_expiry" type="date"></label>
+<label>套餐视频并发<input name="video_concurrency" type="number" min="0" max="10000" step="1" placeholder="未登记"></label>
+<label>套餐图片并发<input name="image_concurrency" type="number" min="0" max="10000" step="1" placeholder="未登记"></label>
+<label>状态<select name="status"><option value="active">启用</option><option value="disabled">禁用</option></select></label>
+<label>备注<textarea name="note" maxlength="2000"></textarea></label></div>
+<p id="accountSaveState" role="status"></p><div class="hf-title-actions hf-spacing"><button id="accountSave" class="hf-button primary" type="submit">保存会员资料</button><button id="accountReload" class="hf-button" type="button">重新读取资料</button><button class="hf-button" type="button" data-route="accounts/new">连接／恢复授权</button></div></form>
+</section>
+<section data-page="authorization" hidden>
+  <div class="hf-title-row"><div><h2>会员授权</h2><p class="hf-muted">连接你已有的会员，让团队使用订阅额度。</p></div><span class="hf-tag" id="authorizationBadge">待检查</span></div>
+  <article class="hf-panel hf-auth-overview"><div class="hf-auth-description"><h3 id="authorizationHeading">检查服务器会员连接</h3><p>成员使用自己的 Studio 身份，服务器负责维护会员授权。</p><dl class="hf-facts"><div><dt>工作区</dt><dd id="workspaceState">等待校验原绑定</dd></div></dl></div><button class="hf-button primary" id="connect" aria-expanded="false" aria-controls="authorizationFlow">连接或重新授权</button></article>
+  <section id="authorizationFlow" class="hf-panel hf-spacing" hidden><h3 tabindex="-1" id="flowTitle">在本机完成会员授权</h3><ol class="hf-auth-flow">
+    <li><span class="hf-step-number">1</span><div><h4>本地登录 Higgsfield</h4><p>将下面的请求交给本地自有 Skills，按官方浏览器页面完成登录。</p><label class="hf-field">给我的 Skills 的授权请求<textarea id="authorizationRequest" rows="4" readonly>请使用我的 verdantflare-video Skill，为当前团队的 Higgsfield 会员渠道完成本地登录与受控授权交接。先核对本地与服务器的 DMIT 出口一致，使用原绑定工作区；不要生成视频，不要显示或上传凭据到聊天，交接后检查服务器授权并保留现有停用和限额设置。</textarea></label><button id="copy" class="hf-button">复制授权请求</button><p id="copyState" role="status"></p></div></li>
+    <li><span class="hf-step-number">2</span><div><h4>受控交接给服务器</h4><p>Skills 校验账号、工作区与授权版本后交接，服务器成为唯一刷新方。本机停止使用已交接的授权。</p></div></li>
+    <li><span class="hf-step-number">3</span><div><h4>确认连接结果</h4><p>交接完成后点击下方检查。成功连接不会自动提高限额或开启新增生成。</p></div></li>
+  </ol></section>
+  <div class="hf-title-actions hf-spacing"><button class="hf-button" id="check">检查授权与用量</button><span id="checkState" class="hf-caption" role="status"></span></div>
+</section>
+<section data-page="usage" hidden><h2>调用日志汇总</h2>
+<form id="logFilters" class="hf-toolbar"><label class="hf-search">搜索<input id="logSearch" placeholder="搜索任务、模型或账号"></label><label>媒体<select id="logMedia"><option value="">全部媒体</option><option value="image">图片</option><option value="video">视频</option><option value="music">音乐</option><option value="speech">语音</option></select></label><label>状态<select id="logStatus"><option value="">全部状态</option><option value="completed">已完成</option><option value="failed">失败</option><option value="acceptance_unknown">受理待确认</option><option value="running">处理中</option></select></label><button class="hf-button" type="submit">查询</button></form>
+<div class="hf-ledger-summary"><span>当前任务：<b id="taskCount">—</b></span><span>预算：<b id="budgetTotal">—</b></span><span>结算：<b id="settlementTotal">—</b></span></div>
+<p id="usageState" role="status"></p><div class="hf-table-wrap"><table><thead><tr><th>调用时间／任务</th><th>账号</th><th>媒体／操作</th><th>模型</th><th>状态</th><th>耗时</th><th><span class="hf-budget-tooltip" tabindex="0" aria-describedby="budget-help">预算积分 ⓘ<span role="tooltip" id="budget-help">生成前估算</span></span></th><th>结算积分</th></tr></thead><tbody id="usage"></tbody></table></div>
+<div class="hf-title-actions hf-spacing"><button id="usageFirst" class="hf-button">首页</button><button id="usageNext" class="hf-button" disabled>下一页</button></div></section>
+<section data-page="limits" hidden><h2>团队使用限额</h2><p class="hf-muted">按当前绑定累计；修改不会重置历史任务与用量。</p>
+  <form id="limitsForm" class="hf-panel hf-spacing"><div class="hf-form-grid"><label class="hf-field">累计消费上限 / Credits<input id="credits" inputmode="decimal" required pattern="(0|[1-9][0-9]{0,11})(\.[0-9]{1,6})?"></label><label class="hf-field">累计提交条数上限<input id="submissions" type="number" min="0" max="2147483647" step="1" required></label></div>
+  <dl class="hf-inline-facts"><div><dt>历史已提交</dt><dd id="submitted">—</dd></div><div><dt>历史报价预留</dt><dd id="limitsReserved">—</dd></div><div><dt>限额版本</dt><dd id="revision">—</dd></div></dl>
+  <div class="hf-notice">设为 0 即暂停新增，已有任务仍可读取。保存正数上限后仍需满足 Video 渠道开关与授权状态。</div><button id="save" class="hf-button primary" type="submit">保存设置</button><p id="saveState" role="status"></p></form>
+</section></div></main><script type="module" src="./dashboard.mjs"></script></body></html>
