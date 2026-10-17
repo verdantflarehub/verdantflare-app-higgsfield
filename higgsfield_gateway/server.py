@@ -68,6 +68,9 @@ def create_app(gateway=None, token=None):
                     "size": int(request.headers.get("Content-Length", "0"))})
                 result = await g.inputs.receive(reference, request.stream())
                 return JSONResponse(result, headers={"Cache-Control": "no-store"})
+            if request.method == "POST" and request.url.path == "/v1/jobs" and not g.accepting:
+                return JSONResponse({"error": "channel_unavailable", "schema_version": 1,
+                                     "accepted": False, "state": "rejected"}, status_code=503)
             data = None
             if request.method == "POST":
                 content = bytearray()

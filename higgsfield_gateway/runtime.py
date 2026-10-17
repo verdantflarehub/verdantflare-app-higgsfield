@@ -11,6 +11,9 @@ import socket
 import uvicorn
 
 from .dashboard import DashboardAssets
+from . import __version__
+from .discovery_lifecycle import configured_publisher, PublicationLifetime
+from .discovery_store import Store
 from .channel import VideoChannel
 from .management import create_management_app
 from .server import create_app, gateway_owner
@@ -23,7 +26,7 @@ class Server(uvicorn.Server):
         yield
 
 
-async def serve_pair(servers, sockets, stop):
+async def serve_pair(servers, sockets, stop, *, on_draining=None):
     tasks = [asyncio.create_task(server.serve(sockets=[sock])) for server, sock in zip(servers, sockets, strict=True)]
     stopping = asyncio.create_task(stop.wait())
     cancelled = False
@@ -34,6 +37,8 @@ async def serve_pair(servers, sockets, stop):
     finally:
         # Never cancel an ASGI lifespan/worker thread while it may own OAuth.
         # A listener failure drains its peer before the outer owner lock closes.
+        if on_draining:
+            on_draining()
         for server in servers:
             server.should_exit = True
         stopping.cancel()
@@ -54,11 +59,15 @@ async def serve_pair(servers, sockets, stop):
 
 
 @contextmanager
-def signals(stop):
+def signals(stop, on_stop=None):
     previous = {}
+    def request_stop(*_):
+        if on_stop:
+            on_stop()
+        stop.set()
     try:
         for signum in (signal.SIGTERM, signal.SIGINT):
-            previous[signum] = signal.signal(signum, lambda *_: stop.set())
+            previous[signum] = signal.signal(signum, request_stop)
         yield
     finally:
         for signum, handler in previous.items():
@@ -71,7 +80,14 @@ async def run():
     management_token = os.environ["HIGGSFIELD_MANAGEMENT_TOKEN"]
     station_id = os.environ["HIGGSFIELD_STATION_ID"]
     stop = asyncio.Event()
-    with signals(stop), gateway_owner() as gateway, ExitStack() as stack:
+    lifetime = None
+    gateway = None
+    def begin_draining():
+        if gateway is not None:
+            gateway.accepting = False
+        if lifetime:
+            lifetime.begin_draining()
+    with signals(stop, begin_draining), gateway_owner() as gateway, ExitStack() as stack:
         channel = VideoChannel(gateway.binding, gateway.organization)
         stack.callback(channel.close)
         # All credentials, binding and package checks precede either listener.
@@ -87,7 +103,19 @@ async def run():
         servers = [Server(uvicorn.Config(app, host="0.0.0.0", port=port, workers=1,
             access_log=False, log_level="warning", lifespan="on", timeout_graceful_shutdown=None))
             for app, port in zip(apps, (8000, 8001), strict=True)]
-        await serve_pair(servers, sockets, stop)
+        configured = os.environ.get('CHANNEL_DISCOVERY_ETCD_URL') or os.environ.get('CHANNEL_DISCOVERY_SCOPE_ID')
+        store = Store(gateway.root / 'channel-discovery.sqlite3') if configured else None
+        publisher = configured_publisher(os.environ, store, __version__)
+        task = None
+        if publisher:
+            lifetime = PublicationLifetime(publisher, servers, lambda value: setattr(gateway, 'accepting', value))
+            task = asyncio.create_task(lifetime.run())
+        try:
+            await serve_pair(servers, sockets, stop, on_draining=begin_draining)
+        finally:
+            begin_draining()
+            if lifetime:
+                await lifetime.finish(task)
 
 
 def main():

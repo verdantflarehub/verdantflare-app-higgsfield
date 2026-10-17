@@ -39,6 +39,7 @@ class Gateway:
             raise ValueError("invalid_limits")
         if not all((binding, organization, workspace)):
             raise ValueError("account_binding_required")
+        self.accepting = True
         self.root, self.cli = root, cli
         self.binding, self.organization, self.workspace = binding, organization, workspace
         initial = LimitUpdate(binding_id=binding, revision=1, credit_limit=str(credit_limit),

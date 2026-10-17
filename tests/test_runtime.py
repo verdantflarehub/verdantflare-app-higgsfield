@@ -83,7 +83,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         def management(gateway, **kwargs):
             self.assertIs(gateway, owner)
             return "management"
-        async def serve(servers, sockets, stop):
+        async def serve(servers, sockets, stop, *, on_draining=None):
             self.assertEqual(events, ["lock"])
             self.assertEqual(len(servers), 2)
             events.append("drained")
@@ -91,12 +91,53 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
                "HIGGSFIELD_STATION_ID": "station-test"}
         with patch.dict(runtime.os.environ, env), patch.object(runtime, "DashboardAssets"), \
                 patch.object(runtime, "gateway_owner", own), patch.object(runtime, "signals"), \
-                patch.object(runtime.socket, "socket"), patch.object(runtime, "Server"), \
+                patch.object(runtime, "socket"), patch.object(runtime, "Server"), \
                 patch.object(runtime, "VideoChannel"), \
                 patch.object(runtime, "create_app", execution), patch.object(runtime, "create_management_app", management), \
                 patch.object(runtime, "serve_pair", serve):
             await runtime.run()
         self.assertEqual(events, ["lock", "drained", "unlock"])
+
+    async def test_configured_publication_finishes_before_releasing_execution_owner(self):
+        from pathlib import Path
+        owner = SimpleNamespace(binding='fixture', organization='fixture-org', root=Path('synthetic-root'), accepting=True)
+        events = []
+        @contextmanager
+        def own():
+            events.append('locked')
+            yield owner
+            events.append('unlocked')
+        class Lifetime:
+            def __init__(self, publisher, servers, set_accepting):
+                self.set_accepting = set_accepting
+                set_accepting(False)
+            async def run(self):
+                events.append('publisher_started')
+            def begin_draining(self):
+                self.set_accepting(False)
+            async def finish(self, task):
+                await task
+                events.append('publisher_closed')
+        async def serve(servers, sockets, stop, *, on_draining=None):
+            await asyncio.sleep(0)
+            self.assertFalse(owner.accepting)
+            self.assertEqual(events, ['locked', 'publisher_started'])
+            on_draining()
+            events.append('listeners_drained')
+        env = {'HIGGSFIELD_INTERNAL_TOKEN': 'e' * 32, 'HIGGSFIELD_MANAGEMENT_TOKEN': 'm' * 32,
+               'HIGGSFIELD_STATION_ID': 'station-test',
+               'CHANNEL_DISCOVERY_ETCD_URL': 'http://etcd.example.svc.cluster.local:2379',
+               'CHANNEL_DISCOVERY_SCOPE_ID': 'station-test'}
+        with patch.dict(runtime.os.environ, env), patch.object(runtime, 'DashboardAssets'), \
+                patch.object(runtime, 'gateway_owner', own), patch.object(runtime, 'signals'), \
+                patch.object(runtime, 'socket'), patch.object(runtime, 'Server'), \
+                patch.object(runtime, 'VideoChannel'), patch.object(runtime, 'Store'), \
+                patch.object(runtime, 'configured_publisher', return_value=object()), \
+                patch.object(runtime, 'PublicationLifetime', Lifetime), \
+                patch.object(runtime, 'create_app'), patch.object(runtime, 'create_management_app'), \
+                patch.object(runtime, 'serve_pair', serve):
+            await runtime.run()
+        self.assertEqual(events, ['locked', 'publisher_started', 'listeners_drained', 'publisher_closed', 'unlocked'])
 
 
 if __name__ == "__main__":

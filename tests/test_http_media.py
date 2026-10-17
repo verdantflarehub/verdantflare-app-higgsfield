@@ -34,6 +34,22 @@ class HTTPTests(unittest.IsolatedAsyncioTestCase):
     def headers(self):
         return {"Authorization": "Bearer " + self.token}
 
+    async def test_draining_rejects_new_jobs_and_preserves_cost_and_original_status(self):
+        first = request()
+        response = await self.client.post('/v1/jobs', json=first.model_dump(), headers=self.headers())
+        self.assertEqual(response.status_code, 200)
+        self.gateway.accepting = False
+        before = list(self.cli.calls)
+        rejected = await self.client.post('/v1/jobs', json=request(2).model_dump(), headers=self.headers())
+        self.assertEqual(rejected.status_code, 503)
+        self.assertFalse(rejected.json()['accepted'])
+        self.assertEqual(self.cli.calls, before)
+        status = await self.client.get('/v1/jobs/' + first.request_id, headers=self.headers())
+        self.assertEqual(status.status_code, 200)
+        quote = await self.client.post('/v1/cost', json=first.generation.model_dump(), headers=self.headers())
+        self.assertEqual(quote.status_code, 200)
+        self.assertEqual(sum(c[:2] == ['generate', 'create'] for c in self.cli.calls), 1)
+
     async def test_unauthenticated_and_duplicate_credentials_rejected(self):
         for headers in ({}, {"Authorization": "Bearer wrong"},
                         [("Authorization", "Bearer " + self.token), ("Authorization", "Bearer " + self.token)]):
