@@ -2,6 +2,25 @@ export function errorCode(error) {
   return error?.code || error?.message || 'REQUEST_UNAVAILABLE';
 }
 
+export function logSettlement(item) {
+  if (item.settlement?.amount != null) return `${item.settlement.amount} ${item.settlement.unit}`;
+  return ['completed', 'failed', 'rejected', 'cancelled'].includes(item.state) ? '未知' : '待结算';
+}
+
+export function logQuery(values) {
+  const query = {search:values.search || '', state:values.state || '', media:values.media || '', account_id:values.account_id || ''};
+  if (values.from && values.to && values.from > values.to) throw new Error('INVALID_DATE_RANGE');
+  for (const [field, value] of [['created_from', values.from], ['created_before', values.to]]) {
+    if (!value) continue;
+    const date = new Date(`${value}T00:00:00`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(date.getTime())) throw new Error('INVALID_DATE_RANGE');
+    // Calendar increment includes the entire selected end date across DST changes.
+    if (field === 'created_before') date.setDate(date.getDate() + 1);
+    query[field] = date.toISOString();
+  }
+  return query;
+}
+
 export async function request(sdk, method, path, body, signal) {
   const input = {method, path};
   if (body !== undefined) input.body = body;

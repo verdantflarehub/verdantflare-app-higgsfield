@@ -1,4 +1,4 @@
-import {createLimitsEditor, errorCode, request, accountView, accountPayload, registrationFields} from './model.mjs';
+import {createLimitsEditor, errorCode, request, accountView, accountPayload, registrationFields, logSettlement, logQuery} from './model.mjs';
 
 const root = document.getElementById('dashboard'), $ = id => root.querySelector(`#${id}`);
 const {appSDK: sdk, dashboardHost: bridge} = window.$wujie?.props || {};
@@ -6,7 +6,7 @@ const pages = new Set(['overview', 'authorization', 'usage', 'account']);
 const authNames = {authorized: '已授权', unconnected: '未连接', authorization_required: '需重新授权', unavailable: '暂时无法观测'};
 let disposed = false, visible = true, overview = null, timer, reader, readVersion = 0;
 let readFailures = 0, readsStopped = false;
-let dirty = false, editor, usageCursor = null, usageNext = null, usageReader;
+let dirty = false, editor, usageCursor = null, usageNext = null, usageReader, usageTotal = 0, usageFilters = {};
 let account = null, editingAccount = null, accountDirty = false, accountBusy = false, currentPage = "overview";
 let composing = false;
 const events = new AbortController(), unsubscribe = [];
@@ -80,16 +80,23 @@ async function refresh(automatic = false) {
 }
 const stateNames = {completed:'已完成', failed:'失败', acceptance_unknown:'受理待确认', running:'处理中', queued:'排队中'};
 const amount = value => value?.amount == null ? '未知' : `${value.amount} ${value.unit}`;
-async function loadUsage() {
+async function loadUsage({offset = usageCursor || 0, applyFilters = false} = {}) {
   if (!visible || disposed) return;
   usageReader?.abort(); const activeReader = usageReader = new AbortController();
-  text('usageState', '正在读取日志…'); $('usageNext').disabled = true;
+  text('usageState', '正在读取日志…');
+  for (const id of ['usageFirst', 'usagePrevious', 'usageNext']) $(id).disabled = true;
   try {
-    const value = await request(sdk, 'POST', '/calls/search', {
-      offset: usageCursor || 0, limit: 20, search: $('logSearch').value,
-      state: $('logStatus').value, media: $('logMedia').value,
-    }, activeReader.signal);
+    const filters = applyFilters ? logQuery({search:$('logSearch').value, state:$('logStatus').value,
+      media:$('logMedia').value, account_id:$('logAccount').value, from:$('logFrom').value, to:$('logTo').value}) : usageFilters;
+    const value = await request(sdk, 'POST', '/calls/search', {offset, limit:20, ...filters}, activeReader.signal);
     if (disposed || !visible || usageReader !== activeReader) return;
+    usageCursor = offset; usageFilters = filters; usageTotal = value.total;
+    const selectedAccount = $('logAccount').value;
+    $('logAccount').replaceChildren();
+    for (const item of [{account_id:'', name:'全部账号'}, ...(value.accounts || [])]) {
+      const option = document.createElement('option'); option.value = item.account_id; option.textContent = item.name; $('logAccount').append(option);
+    }
+    $('logAccount').value = selectedAccount;
     $('usage').replaceChildren();
     text('taskCount', `${value.summary.task_count}次`);
     text('budgetTotal', amount(value.summary.budget));
@@ -98,20 +105,25 @@ async function loadUsage() {
       const row = document.createElement('tr');
       const values = [time(item.created_at), item.account_name, '视频／生成', item.model_id,
         stateNames[item.state] || item.state, item.duration_seconds == null ? '—' : `${item.duration_seconds}秒`,
-        amount(item.budget), amount(item.settlement)];
+        amount(item.budget), logSettlement(item)];
       for (const value of values) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
       const task = document.createElement('small'); task.textContent = item.task_id; row.firstChild.append(task);
       $('usage').append(row);
     }
     text('usageState', value.items.length ? '' : '暂无符合条件的调用日志。');
-    usageNext = (usageCursor || 0) + value.items.length;
-    $('usageNext').disabled = usageNext >= value.total;
-    $('usageFirst').disabled = !usageCursor;
+    usageNext = offset + value.items.length;
+    text('usageRange', value.total ? `${value.items.length ? offset + 1 : 0}–${usageNext} / ${value.total}` : '0 / 0');
   } catch (error) {
     if (disposed || !visible || usageReader !== activeReader) return;
-    text('usageState', '读取失败，已保留上次日志。请重新读取。'); failure(error, '日志读取失败。');
+    text('usageState', error.message === 'INVALID_DATE_RANGE' ? '结束日期不能早于开始日期，请检查日期。' : '读取失败，已保留上次日志。请重新读取。');
+    if (error.message !== 'INVALID_DATE_RANGE') failure(error, '日志读取失败。');
+  } finally {
+    if (!disposed && visible && usageReader === activeReader) {
+      $('usageFirst').disabled = $('usagePrevious').disabled = !usageCursor;
+      $('usageNext').disabled = usageNext == null || usageNext >= usageTotal;
+      size();
+    }
   }
-  size();
 }
 
 function renderAccount() {
@@ -253,15 +265,16 @@ if (!sdk?.app || !sdk?.theme || !sdk?.navigation?.get || !bridge) {
     if (accountBusy || (accountDirty && !window.confirm('重新读取会替换尚未保存的会员资料，继续吗？'))) return;
     const loaded = await refresh(); if (loaded && !disposed && account) { fillAccount(true); text('accountSaveState', '已读取当前会员资料。'); }
   }, {signal:events.signal});
-  $('logFilters').addEventListener('submit', event => { event.preventDefault(); if (composing) return; usageCursor = null; void loadUsage(); }, {signal: events.signal});
-  $('usageFirst').onclick = () => { usageCursor = null; void loadUsage(); };
-  $('usageNext').onclick = () => { usageCursor = usageNext; void loadUsage(); };
+  $('logFilters').addEventListener('submit', event => { event.preventDefault(); if (composing) return; void loadUsage({offset:0, applyFilters:true}); }, {signal: events.signal});
+  $('usageFirst').onclick = () => { void loadUsage({offset:0}); };
+  $('usagePrevious').onclick = () => { void loadUsage({offset:Math.max(0, (usageCursor || 0) - 20)}); };
+  $('usageNext').onclick = () => { if (usageNext != null) void loadUsage({offset:usageNext}); };
   const resize = new ResizeObserver(size); resize.observe(root);
   function dispose() {
     if (disposed) return;
     disposed = true; clearTimeout(timer); reader?.abort(); usageReader?.abort(); events.abort(); resize.disconnect();
     for (const stop of unsubscribe) stop();
-    for (const id of ['reload', 'connect', 'copy', 'check', 'usageFirst', 'usageNext']) $(id).onclick = null;
+    for (const id of ['reload', 'connect', 'copy', 'check', 'usageFirst', 'usagePrevious', 'usageNext']) $(id).onclick = null;
     $('business').hidden = true; overview = null;
   }
   unsubscribe.push(sdk.lifecycle.subscribe(event => {
