@@ -127,8 +127,8 @@ async function loadUsage({offset = usageCursor || 0, applyFilters = false} = {})
 }
 
 function renderAccount() {
-  const matches = account && account.name.includes($('accountSearch').value) && (!$('accountFilter').value || account.status === $('accountFilter').value);
-  $('accountCard').hidden = !matches; $('accountEmpty').hidden = Boolean(matches);
+  text('accountCount', `${account ? 1 : 0} 个账号`);
+  $('accountCard').hidden = !account; $('accountEmpty').hidden = Boolean(account);
   if (!account) return;
   const view = accountView(account, overview.authorization);
   for (const [id, key] of Object.entries({accountName:'name',accountStatus:'status',membershipTier:'tier',membershipPrice:'price',membershipCredits:'credits',membershipQuota:'quota',membershipExpiry:'expiry',membershipConcurrency:'concurrency',providerBalance:'providerBalance'})) text(id, view[key]);
@@ -145,7 +145,6 @@ function fillAccount(force = false) {
   const form = $('accountForm');
   for (const field of registrationFields) form.elements.namedItem(field).value = account.registration?.[field] ?? '';
   form.elements.namedItem('name').value = account.name;
-  form.elements.namedItem('status').value = account.status;
   accountDirty = false; updateEditor();
 }
 async function mutateAccount(method, value, source = account) {
@@ -242,7 +241,6 @@ if (!sdk?.app || !sdk?.theme || !sdk?.navigation?.get || !bridge) {
       } else { text('saveState', editor.snapshot().pending ? '结果尚未确认，请重试原保存请求。' : '保存未完成，请检查输入并重试。'); if (denied(error)) failure(error, ''); }
     } finally { if (!disposed) updateEditor(); }
   }, {signal: events.signal});
-  $('accountFilters').addEventListener('submit', event => { event.preventDefault(); if (!composing && overview) renderAccount(); }, {signal:events.signal});
   $('accountRefresh').addEventListener('click', () => $('check').click(), {signal:events.signal});
   $('accountEdit').addEventListener('click', async () => {
     if (!account) return;

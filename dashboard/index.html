@@ -12,9 +12,8 @@
 <button id="reload" class="hf-button">重新读取</button>
 <div id="business" hidden>
 <section data-page="overview">
-  <div class="hf-title-row"><div><h2>账号概览</h2><p class="hf-muted">查看会员套餐、Credits 与授权状态。</p></div><button class="hf-button primary" data-route="accounts/new">＋ 连接会员</button></div>
-  <form id="accountFilters" class="hf-toolbar"><label class="hf-search">搜索账号<input id="accountSearch" placeholder="搜索账号"></label><label>账号状态<select id="accountFilter"><option value="">全部状态</option><option value="active">启用</option><option value="disabled">禁用</option></select></label><button class="hf-button" type="submit">查询</button></form>
-  <p id="accountEmpty" class="hf-state" hidden>没有匹配的账号。调整筛选或连接会员。</p>
+  <div class="hf-title-row"><div><h2>账号概览</h2><p id="accountCount" class="hf-muted">1 个账号</p></div><button class="hf-button primary" data-route="accounts/new">＋ 连接会员</button></div>
+  <p id="accountEmpty" class="hf-state" hidden>还没有账号。点击上方按钮连接会员。</p>
   <article id="accountCard" class="hf-panel">
     <div class="hf-title-row"><div><h2><span id="accountName"></span> <span id="accountStatus" class="hf-tag" role="status"></span></h2><p class="hf-muted"><span id="authState"></span> · 固定出口</p></div><div class="hf-title-actions">
     <button id="accountRefresh" class="hf-button hf-icon" title="更新" aria-label="更新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6"/></svg></button>
@@ -38,7 +37,6 @@
 <label>会员到期<input name="membership_expiry" type="date"></label>
 <label>套餐视频并发<input name="video_concurrency" type="number" min="0" max="10000" step="1" placeholder="未登记"></label>
 <label>套餐图片并发<input name="image_concurrency" type="number" min="0" max="10000" step="1" placeholder="未登记"></label>
-<label>状态<select name="status"><option value="active">启用</option><option value="disabled">禁用</option></select></label>
 <label>备注<textarea name="note" maxlength="2000"></textarea></label></div>
 <p id="accountSaveState" role="status"></p><div class="hf-title-actions hf-spacing"><button id="accountSave" class="hf-button primary" type="submit">保存会员资料</button><button id="accountReload" class="hf-button" type="button">重新读取资料</button><button class="hf-button" type="button" data-route="accounts/new">连接／恢复授权</button></div></form>
 </section>

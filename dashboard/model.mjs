@@ -105,5 +105,5 @@ export function accountPayload(account, values) {
       ? (value === '' ? null : Number(value))
       : ['monthly_price_usd', 'remaining_credits', 'monthly_credits'].includes(field) ? (value === '' ? null : value) : value;
   }
-  return {expected_revision: account.revision, name: values.name.trim() || 'Higgsfield 账号', status: values.status, registration};
+  return {expected_revision: account.revision, name: values.name.trim() || 'Higgsfield 账号', status: values.status || account.status, registration};
 }
