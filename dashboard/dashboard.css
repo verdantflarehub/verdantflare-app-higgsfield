@@ -42,6 +42,12 @@ html,body{margin:0;min-height:0;background:transparent;color:var(--ink);font-fam
 .hf-ledger-summary{display:flex;flex-wrap:wrap;gap:24px;padding:18px 0;font-variant-numeric:tabular-nums}
 .hf-table-wrap{overflow-x:auto}.hf-table-wrap table{width:100%;border-collapse:collapse;text-align:left;font-size:13px}
 .hf-table-wrap th,.hf-table-wrap td{padding:14px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.hf-table-wrap table{min-width:860px}
+.hf-table-wrap th{white-space:nowrap}
+.hf-table-wrap td:first-child{width:28%;min-width:190px;max-width:320px}
+.hf-table-wrap td:nth-child(2){min-width:100px;max-width:180px;overflow-wrap:anywhere}
+.hf-table-wrap td:nth-child(4){min-width:110px;max-width:190px;overflow-wrap:anywhere}
+.hf-table-wrap td:nth-child(3),.hf-table-wrap td:nth-child(5),.hf-table-wrap td:nth-child(6),.hf-table-wrap td:nth-child(7),.hf-table-wrap td:nth-child(8){white-space:nowrap}
 .hf-table-wrap small{display:block;color:var(--muted);margin-top:6px;overflow-wrap:anywhere}
 .hf-budget-tooltip{position:relative;cursor:help}.hf-budget-tooltip [role=tooltip]{display:none;position:absolute;bottom:100%;left:0;padding:8px;background:var(--panel);border:1px solid var(--line);white-space:nowrap}
 .hf-budget-tooltip:hover [role=tooltip],.hf-budget-tooltip:focus [role=tooltip]{display:block}
