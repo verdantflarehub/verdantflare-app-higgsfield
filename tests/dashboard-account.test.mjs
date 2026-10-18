@@ -77,3 +77,13 @@ test('read failures stop after three automatic retries until explicit reload',as
   assert.match(f.element('message').textContent,/自动更新已停止/);
   await f.run('refresh()'); assert.equal(f.calls.length,count+2); assert.equal(f.run('readFailures'),1);
 });
+
+test('v0.2 full-width layout, top breadcrumb, official brand logo and zero return buttons',()=>{
+  const index = readFileSync(new URL('../dashboard/index.html',import.meta.url),'utf8');
+  const css = readFileSync(new URL('../dashboard/dashboard.css',import.meta.url),'utf8');
+  assert.ok(index.indexOf('id="breadcrumb"') < index.indexOf('class="hf-heading"'));
+  assert.match(index, /#D1FE17/);
+  assert.match(css, /\.hf-workspace\{width:100%;min-width:0;max-width:none\}/);
+  assert.doesNotMatch(index, /data-cancel|返回概览|>取消</);
+});
+

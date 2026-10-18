@@ -178,8 +178,11 @@ function route(value) {
   root.querySelectorAll('nav [data-route]').forEach(el => {
     if (el.dataset.route === (page === 'usage' ? 'log' : 'overview')) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current');
   });
-  $('breadcrumb').hidden = !['authorization', 'account'].includes(page);
-  text('breadcrumbPage', page === 'account' ? '编辑账号' : '连接会员');
+  const isSubpage = ['authorization', 'account'].includes(page);
+  $('appTabs').hidden = isSubpage;
+  $('breadcrumb').hidden = false;
+  $('breadcrumbHome').disabled = !isSubpage && page === 'overview';
+  text('breadcrumbPage', page === 'account' ? '编辑账号' : page === 'authorization' ? '连接会员' : page === 'usage' ? '日志' : '概览');
   if (page === 'account') fillAccount();
   if (page === 'usage') void loadUsage();
   size();
