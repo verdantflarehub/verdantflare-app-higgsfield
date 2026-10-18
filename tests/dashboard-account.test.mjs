@@ -83,7 +83,9 @@ test('v0.2 full-width layout, top breadcrumb, official brand logo and zero retur
   const css = readFileSync(new URL('../dashboard/dashboard.css',import.meta.url),'utf8');
   assert.ok(index.indexOf('id="breadcrumb"') < index.indexOf('class="hf-heading"'));
   assert.match(index, /#D1FE17/);
+  assert.doesNotMatch(index, /渠道管理<\/span>/);
   assert.match(css, /\.hf-workspace\{width:100%;min-width:0;max-width:none\}/);
+  assert.match(css, /\.hf-workspace\{padding:0;container-type:inline-size\}/);
   assert.doesNotMatch(index, /data-cancel|返回概览|>取消</);
 });
 

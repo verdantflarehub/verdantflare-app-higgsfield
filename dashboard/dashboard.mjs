@@ -182,6 +182,8 @@ function route(value) {
   $('appTabs').hidden = isSubpage;
   $('breadcrumb').hidden = false;
   $('breadcrumbHome').disabled = !isSubpage && page === 'overview';
+  $('breadcrumbOverviewSep').hidden = !isSubpage;
+  $('breadcrumbOverview').hidden = !isSubpage;
   text('breadcrumbPage', page === 'account' ? '编辑账号' : page === 'authorization' ? '连接会员' : page === 'usage' ? '日志' : '概览');
   if (page === 'account') fillAccount();
   if (page === 'usage') void loadUsage();
