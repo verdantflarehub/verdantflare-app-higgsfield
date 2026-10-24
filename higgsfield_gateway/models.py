@@ -12,7 +12,7 @@ MODELS = {
     "wan3_0": {"minimum_duration": 2, "maximum_duration": 30,
                "ratios": ["16:9", "9:16", "4:3", "3:4", "1:1"], "first_frame": False},
     "grok_video_v15_lite": {"minimum_duration": 2, "maximum_duration": 15,
-                           "ratios": ["16:9", "9:16", "4:3", "3:4", "1:1"], "first_frame": True},
+                           "ratios": ["16:9", "9:16", "4:3", "3:4", "1:1"], "first_frame": False},
     "seedance_2_5": {"minimum_duration": 4, "maximum_duration": 15,
                      "ratios": ["16:9", "9:16", "4:3", "3:4", "1:1", "21:9"], "first_frame": False},
 }
