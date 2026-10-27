@@ -82,6 +82,12 @@ class CLI:
                 # exit code 2 alone nor arbitrary provider text proves auth loss.
                 if process.returncode == 2 and b"Hint: Run: hf auth login" in diagnostic.splitlines():
                     raise ProviderError("authorization_required")
+                # Both pinned 1.1.26 and official 1.2.3 return this bounded
+                # diagnostic for the currently unavailable Draft cost path.
+                # Preserve its cause; do not infer expired media or retry create.
+                if process.returncode == 3 and any(line.strip().lower() in
+                        (b"not found", b"error: not found") for line in diagnostic.splitlines()):
+                    raise ProviderError("provider_not_found")
                 raise ProviderError("provider_call_failed")
             out.seek(0)
             data = out.read(4 * 1024 * 1024 + 1)

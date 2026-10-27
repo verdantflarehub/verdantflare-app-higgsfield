@@ -90,6 +90,12 @@ def create_app(gateway=None, token=None):
                 result = await run_in_threadpool(g.account)
             elif request.url.path == "/v1/models":
                 result = g.capabilities()
+            elif request.url.path == "/v1/capabilities":
+                from .metadata import capabilities
+                try:
+                    result = capabilities()
+                except ValueError:
+                    raise GatewayError("capabilities_unavailable", 503) from None
             elif request.url.path == "/v1/cost":
                 result = await run_in_threadpool(g.cost, Generation.model_validate(data))
             elif request.url.path == "/v1/jobs":
@@ -113,7 +119,7 @@ def create_app(gateway=None, token=None):
             return JSONResponse({"error": "storage_unavailable"}, status_code=503)
 
     app = Starlette(routes=[Route("/health", health),
-        Route("/v1/account", handle), Route("/v1/models", handle),
+        Route("/v1/account", handle), Route("/v1/models", handle), Route("/v1/capabilities", handle),
         Route("/v1/inputs/{project:str}/{digest:str}/{format:str}", handle, methods=["PUT"]),
         Route("/v1/cost", handle, methods=["POST"]), Route("/v1/jobs", handle, methods=["POST"]),
         Route("/v1/jobs/{identity:str}", handle), Route("/v1/jobs/{identity:str}/content", handle)], lifespan=lifespan)

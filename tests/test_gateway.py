@@ -233,6 +233,8 @@ class GatewayTest(unittest.TestCase):
         cases = [
             (2, b"Error: private diagnostic\nHint: Run: hf auth login\n", "authorization_required"),
             (2, b"Error: network unavailable\n", "provider_call_failed"),
+            (3, b"Error: not found\n", "provider_not_found"),
+            (3, b"private URL not found somewhere\n", "provider_call_failed"),
             (1, b"Hint: Run: hf auth login\n", "provider_call_failed"),
             (2, b"Error: echoed text: Hint: Run: hf auth login\n", "provider_call_failed"),
             (2, b"private" * 600000, "provider_output_exceeded"),

@@ -15,10 +15,11 @@ def configured_publisher(env, store, version):
     if not endpoint or not scope:
         raise ValueError('incomplete_discovery_configuration')
     config = Config(endpoint, scope, env.get('ETCD_USERNAME', ''), env.get('ETCD_PASSWORD', ''))
+    from .metadata import capabilities
     return Publisher(config, store, version, [{
-        'capability_id': capability, 'adapter_version': '1',
-        'execution_state': 'adapter_connected_unverified'}
-        for capability in ('video.generate.text', 'video.generate.image', 'video.generate.reference')])
+        'capability_id': row['capability_id'], 'adapter_version': '1',
+        'execution_state': row['execution_state']}
+        for row in capabilities(env)['capabilities']])
 
 
 class PublicationLifetime:
