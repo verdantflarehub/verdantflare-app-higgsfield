@@ -42,7 +42,7 @@ class Config:
     username: str = field(repr=False)
     password: str = field(repr=False)
     channel: str = 'higgsfield'
-    execution_url: str = 'http://video-higgsfield-gateway.verdantflare-video.svc.cluster.local:8000'
+    execution_url: str = 'http://higgsfield-channel.verdantflare-app.svc.cluster.local:8000'
 
     def __post_init__(self):
         if (not IDENTITY.fullmatch(self.scope) or self.channel != 'higgsfield'
@@ -56,7 +56,7 @@ class Config:
                      and parsed.path in ('', '/') and not parsed.query and not parsed.fragment)
         except ValueError:
             valid = False
-        if not valid or self.execution_url != 'http://video-higgsfield-gateway.verdantflare-video.svc.cluster.local:8000':
+        if not valid or self.execution_url != 'http://higgsfield-channel.verdantflare-app.svc.cluster.local:8000':
             raise ValueError('invalid_discovery_configuration')
 
     @property

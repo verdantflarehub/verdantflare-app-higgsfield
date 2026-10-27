@@ -14,7 +14,9 @@ def configured_publisher(env, store, version):
         return None
     if not endpoint or not scope:
         raise ValueError('incomplete_discovery_configuration')
-    config = Config(endpoint, scope, env.get('ETCD_USERNAME', ''), env.get('ETCD_PASSWORD', ''))
+    config = Config(endpoint, scope, env.get('ETCD_USERNAME', ''), env.get('ETCD_PASSWORD', ''),
+                    execution_url=env.get('CHANNEL_EXECUTION_URL',
+                        'http://higgsfield-channel.verdantflare-app.svc.cluster.local:8000'))
     from .metadata import capabilities
     return Publisher(config, store, version, [{
         'capability_id': row['capability_id'], 'adapter_version': '1',

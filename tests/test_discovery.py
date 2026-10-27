@@ -72,6 +72,8 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(len(writes), 2)
         self.assertEqual({x['lease'] for x in writes}, {'101'})
         values = [json.loads(base64.b64decode(x['value'])) for x in writes]
+        self.assertEqual(values[0]['execution_url'],
+                         'http://higgsfield-channel.verdantflare-app.svc.cluster.local:8000')
         self.assertEqual(set(values[1]), {'state', 'reason_code', 'revision', 'observed_at'})
         self.assertNotIn('synthetic-password', json.dumps(values))
         self.assertEqual(values[0]['capabilities'][0]['execution_state'], 'adapter_connected_unverified')
