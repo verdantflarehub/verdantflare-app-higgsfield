@@ -22,8 +22,13 @@
     <button id="accountDelete" class="hf-button hf-icon" title="删除" aria-label="删除"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button>
     </div></div>
     <p id="disabledNote" class="hf-muted" hidden>账号已禁用，不接收新任务；已有任务可查询和恢复，历史日志保留。</p>
-    <div class="hf-membership"><div><small>会员等级</small><strong id="membershipTier"></strong><small id="membershipPrice"></small></div><div><small>剩余积分</small><strong id="membershipCredits"></strong><small id="membershipQuota"></small></div><div><small>会员到期</small><strong id="membershipExpiry"></strong></div><div><small>套餐并发额度</small><strong id="membershipConcurrency"></strong></div></div>
-    <p class="hf-muted">官网总余额：<span id="providerBalance"></span><span id="balanceStale"></span></p>
+    <div class="hf-membership"><div><small>会员登记</small><strong id="membershipTier"></strong><small id="membershipPrice"></small></div><div><small>人工登记剩余积分</small><strong id="membershipCredits"></strong><small id="membershipQuota"></small></div><div><small>登记会员到期</small><strong id="membershipExpiry"></strong></div><div><small>登记套餐并发额度</small><strong id="membershipConcurrency"></strong></div></div>
+    <section class="hf-provider-balance" aria-labelledby="providerBalanceHeading">
+      <div class="hf-title-row"><h3 id="providerBalanceHeading">供应商余额</h3><span id="balanceStale" class="hf-tag neutral"></span></div>
+      <div class="hf-provider-value"><strong id="providerBalance">未知</strong><span id="providerPlan" class="hf-muted"></span></div>
+      <dl class="hf-observation-facts"><div><dt>最后成功查询</dt><dd id="balanceObserved">尚无成功记录</dd></div><div><dt>最近查询尝试</dt><dd id="balanceAttempt">尚无记录</dd></div><div><dt>查询范围</dt><dd id="balanceScope">当前绑定会员工作区</dd></div></dl>
+      <p id="balanceState" class="hf-muted" role="status"></p><p id="refreshState" class="hf-muted" role="status"></p>
+    </section>
     <div class="hf-title-row"><p class="hf-muted" id="generationState"></p><button class="hf-button" data-route="accounts/new">连接／恢复授权</button></div>
   </article>
 </section>
@@ -50,11 +55,22 @@
   </ol></section>
   <div class="hf-title-actions hf-spacing"><button class="hf-button" id="check">检查授权与用量</button><span id="checkState" class="hf-caption" role="status"></span></div>
 </section>
-<section data-page="usage" hidden><h2>调用日志汇总</h2>
+<section data-page="usage" hidden><h2>渠道日志</h2>
+<div class="hf-log-tabs" role="tablist" aria-label="日志来源"><button id="localLogTab" class="hf-button" role="tab" aria-selected="true" aria-controls="localLogPanel" data-log-view="local">本地调用</button><button id="providerLogTab" class="hf-button" role="tab" aria-selected="false" aria-controls="providerLogPanel" data-log-view="provider">供应商流水</button></div>
+<div id="localLogPanel" role="tabpanel" aria-labelledby="localLogTab">
 <form id="logFilters" class="hf-toolbar hf-log-filters"><label class="hf-search">搜索<input id="logSearch" placeholder="搜索任务、模型或账号"></label><label>账号<select id="logAccount"><option value="">全部账号</option></select></label><label>开始日期<input id="logFrom" type="date"></label><label>结束日期<input id="logTo" type="date"></label><label>媒体<select id="logMedia"><option value="">全部媒体</option><option value="image">图片</option><option value="video">视频</option><option value="music">音乐</option><option value="speech">语音</option></select></label><label>状态<select id="logStatus"><option value="">全部状态</option><option value="completed">已完成</option><option value="failed">失败</option><option value="acceptance_unknown">受理待确认</option><option value="running">处理中</option></select></label><button class="hf-button" type="submit">查询</button></form>
 <div class="hf-ledger-summary"><span>当前任务：<b id="taskCount">—</b></span><span>预算：<b id="budgetTotal">—</b></span><span>结算：<b id="settlementTotal">—</b></span></div>
 <p id="usageState" role="status"></p><div class="hf-table-wrap"><table><thead><tr><th>调用时间／任务</th><th>账号</th><th>媒体／操作</th><th>模型</th><th>状态</th><th>耗时</th><th><span class="hf-budget-tooltip" tabindex="0" aria-describedby="budget-help">预算积分 ⓘ<span role="tooltip" id="budget-help">生成前估算</span></span></th><th>结算积分</th></tr></thead><tbody id="usage"></tbody></table></div>
-<div class="hf-title-actions hf-spacing"><button id="usageFirst" class="hf-button">首页</button><button id="usagePrevious" class="hf-button" disabled>上一页</button><span id="usageRange" class="hf-muted" role="status">—</span><button id="usageNext" class="hf-button" disabled>下一页</button></div></section>
+<div class="hf-title-actions hf-spacing"><button id="usageFirst" class="hf-button">首页</button><button id="usagePrevious" class="hf-button" disabled>上一页</button><span id="usageRange" class="hf-muted" role="status">—</span><button id="usageNext" class="hf-button" disabled>下一页</button></div></div>
+<div id="providerLogPanel" role="tabpanel" aria-labelledby="providerLogTab" hidden>
+  <div class="hf-title-row"><div><h3>会员账户流水</h3><p class="hf-muted">包含当前会员工作区通过官网及其他入口产生的记录；Credits 流水不等于现金支付发票。</p></div><div class="hf-title-actions"><button id="transactionsReload" class="hf-button">重新读取</button><button id="transactionsRefresh" class="hf-button">刷新官方数据</button></div></div>
+  <dl class="hf-observation-facts"><div><dt>最后成功查询</dt><dd id="transactionsObserved">尚无成功记录</dd></div><div><dt>最近查询尝试</dt><dd id="transactionsAttempt">尚无记录</dd></div><div><dt>查询范围</dt><dd id="transactionsScope">未知</dd></div><div><dt>数据来源</dt><dd id="transactionsSource">未知</dd></div></dl>
+  <div class="hf-ledger-summary"><span>本次窗口：<b id="transactionCount">未知</b></span><span>已知支出：<b id="transactionDebit">未知</b></span><span>已知收入：<b id="transactionCredit">未知</b></span><span>方向未知：<b id="transactionUnknown">未知</b></span></div>
+  <p id="transactionsCoverage" class="hf-muted"></p><p id="transactionsState" class="hf-query-state" role="status"></p>
+  <div class="hf-table-wrap hf-transactions-table"><table><thead><tr><th>发生时间</th><th>动作</th><th>收支方向</th><th>Credits</th><th>流水关联</th><th>任务关联</th></tr></thead><tbody id="transactions"></tbody></table></div>
+  <div class="hf-title-actions hf-spacing"><button id="transactionsFirst" class="hf-button">最新一页</button><button id="transactionsPrevious" class="hf-button" disabled>上一页</button><span id="transactionsRange" class="hf-muted" role="status">尚未读取</span><button id="transactionsNext" class="hf-button" disabled>下一页</button></div>
+  <p id="transactionsPagination" class="hf-muted hf-spacing"></p>
+</div></section>
 <section data-page="limits" hidden><h2>团队使用限额</h2><p class="hf-muted">按当前绑定累计；修改不会重置历史任务与用量。</p>
   <form id="limitsForm" class="hf-panel hf-spacing"><div class="hf-form-grid"><label class="hf-field">累计消费上限 / Credits<input id="credits" inputmode="decimal" required pattern="(0|[1-9][0-9]{0,11})(\.[0-9]{1,6})?"></label><label class="hf-field">累计提交条数上限<input id="submissions" type="number" min="0" max="2147483647" step="1" required></label></div>
   <dl class="hf-inline-facts"><div><dt>历史已提交</dt><dd id="submitted">—</dd></div><div><dt>历史报价预留</dt><dd id="limitsReserved">—</dd></div><div><dt>限额版本</dt><dd id="revision">—</dd></div></dl>

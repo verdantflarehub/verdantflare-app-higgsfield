@@ -1,6 +1,6 @@
 FROM docker.io/library/python:3.11.10-slim
 LABEL org.opencontainers.image.source="https://github.com/verdantflarehub/verdantflare-app-higgsfield"
-LABEL org.opencontainers.image.version="0.5.11"
+LABEL org.opencontainers.image.version="0.5.12"
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY install_cli.py /app/install_cli.py

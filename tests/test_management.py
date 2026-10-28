@@ -82,6 +82,8 @@ class ManagementTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn(response.status_code, {401, 403})
             response = await self.client.post("/usage/query", json={}, headers=headers)
             self.assertIn(response.status_code, {401, 403})
+            response = await self.client.post("/transactions/query", json={}, headers=headers)
+            self.assertIn(response.status_code, {401, 403})
         self.assertEqual(self.cli.calls, [])
         self.assertEqual(self.gateway.limits()["revision"], 1)
 
@@ -204,7 +206,8 @@ class ManagementTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["status"], "observed")
         self.assertFalse(snapshot["stale"])
         self.assertEqual(snapshot["last_success"]["items"], [
-            {"action": "spend", "created_at": "2026-10-14T09:00:00+00:00", "credits": "2"}])
+            {"action": "spend", "direction": "debit", "created_at": "2026-10-14T09:00:00+00:00",
+             "credits": "2", "source": "provider_transactions"}])
         self.assertNotIn("private", str(usage))
         count = len(self.cli.calls)
         await self.client.post("/usage/query", json={}, headers=self.headers())
@@ -223,6 +226,11 @@ class ManagementTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(failed["stale"])
         self.assertEqual(failed["status"], "unavailable")
         self.assertEqual(failed["last_success"], snapshot["last_success"])
+        self.assertEqual(auth["check_status"], "failed")
+        self.assertIsNone(auth["error_code"])
+        self.assertEqual(auth["check_error_code"], "PROVIDER_TIMEOUT")
+        self.assertEqual(failed["check_id"], auth["check_id"])
+        self.assertEqual(failed["error_code"], "PROVIDER_TIMEOUT")
 
     async def test_zero_credit_limit_pauses_even_a_zero_quote(self):
         change = self.change()
@@ -251,6 +259,160 @@ class ManagementTest(unittest.IsolatedAsyncioTestCase):
             snapshot = self.app.state.management.transaction_snapshot()
             self.assertEqual(snapshot["status"], "unavailable")
             self.assertEqual(snapshot["last_success"], previous)
+
+    async def test_check_stays_pending_until_transactions_finish(self):
+        started, release = threading.Event(), threading.Event()
+        original = self.gateway.transaction_page
+        def held(*args, **kwargs):
+            started.set()
+            if not release.wait(timeout=3):
+                raise RuntimeError("test release not received")
+            return original(*args, **kwargs)
+        try:
+            with patch.object(self.gateway, "transaction_page", side_effect=held):
+                response = await self.client.post("/authorization/check", json={}, headers=self.headers())
+                check_id = response.json()["check_id"]
+                self.assertTrue(await asyncio.to_thread(started.wait, 1))
+                auth = (await self.client.get("/authorization", headers=self.headers())).json()
+                self.assertEqual(auth["status"], "authorized")
+                self.assertEqual(auth["check_status"], "pending")
+                self.assertEqual(auth["check_id"], check_id)
+                self.assertEqual(auth["pending_check_id"], check_id)
+                usage = (await self.client.post("/usage/query", json={}, headers=self.headers())).json()
+                self.assertEqual(usage["check_status"], "pending")
+                release.set()
+                await asyncio.wait_for(self.app.state.management.check_task, timeout=2)
+        finally:
+            release.set()
+        auth = (await self.client.get("/authorization", headers=self.headers())).json()
+        usage = (await self.client.post("/usage/query", json={}, headers=self.headers())).json()
+        self.assertEqual(auth["check_status"], "completed")
+        self.assertNotIn("pending_check_id", auth)
+        self.assertEqual(usage["provider_transactions"]["check_id"], check_id)
+        self.assertEqual(usage["provider_transactions"]["last_success"]["check_id"], check_id)
+
+    async def test_check_storage_failure_has_current_identity_and_no_false_success(self):
+        previous = await self.check()
+        with patch.object(self.app.state.management, "observe", side_effect=OSError("private storage path")):
+            failed = await self.check()
+        self.assertEqual(failed["check_status"], "failed")
+        self.assertEqual(failed["check_error_code"], "STORAGE_UNAVAILABLE")
+        self.assertNotEqual(failed["check_id"], previous["check_id"])
+        self.assertEqual(failed["last_success"], previous["last_success"])
+        self.assertNotIn("private", str(failed))
+
+    async def test_unexpected_check_failure_never_reuses_a_successful_check(self):
+        previous = await self.check()
+        with patch.object(self.app.state.management, "observe", side_effect=RuntimeError("private internal detail")):
+            failed = await self.check()
+        self.assertEqual(failed["check_status"], "failed")
+        self.assertEqual(failed["check_error_code"], "CHECK_FAILED")
+        self.assertNotEqual(failed["check_id"], previous["check_id"])
+        self.assertEqual(failed["last_success"], previous["last_success"])
+        self.assertNotIn("private", str(failed))
+
+    async def test_expired_reads_keep_original_success_timestamps_without_provider_calls(self):
+        import time
+        auth = await self.check()
+        previous = self.app.state.management.transaction_snapshot()
+        calls = len(self.cli.calls)
+        with patch("higgsfield_gateway.management.time.time", return_value=time.time() + 301):
+            expired_auth = (await self.client.get("/authorization", headers=self.headers())).json()
+            expired_usage = (await self.client.post("/usage/query", json={}, headers=self.headers())).json()
+        self.assertTrue(expired_auth["stale"])
+        self.assertTrue(expired_usage["provider_transactions"]["stale"])
+        self.assertEqual(expired_auth["last_success"], auth["last_success"])
+        self.assertEqual(expired_usage["provider_transactions"]["last_success"], previous["last_success"])
+        self.assertEqual(len(self.cli.calls), calls)
+
+    async def test_restart_does_not_complete_interrupted_check(self):
+        import json
+        checked = await self.check()
+        with self.gateway.db() as db:
+            record = json.loads(db.execute("SELECT record FROM management_observation WHERE id=1").fetchone()[0])
+            record["check_status"] = "pending"
+            db.execute("UPDATE management_observation SET record=? WHERE id=1", (json.dumps(record),))
+        from higgsfield_gateway.management import Management
+        result = Management(self.gateway).authorization()
+        self.assertEqual(result["check_id"], checked["check_id"])
+        self.assertEqual(result["check_status"], "failed")
+        self.assertEqual(result["check_error_code"], "CHECK_INTERRUPTED")
+
+    async def test_accepted_check_is_durable_before_first_provider_result(self):
+        from higgsfield_gateway.management import Management
+        previous = await self.check()
+        self.app.state.management.next_check = 0
+        started, release = threading.Event(), threading.Event()
+        original = self.gateway.account
+        def held():
+            started.set()
+            if not release.wait(timeout=3):
+                raise RuntimeError("test release not received")
+            return original()
+        try:
+            with patch.object(self.gateway, "account", side_effect=held):
+                accepted = await self.client.post("/authorization/check", json={}, headers=self.headers())
+                self.assertEqual(accepted.status_code, 202)
+                self.assertTrue(await asyncio.to_thread(started.wait, 1))
+                restarted = Management(self.gateway).authorization()
+                self.assertEqual(restarted["check_id"], accepted.json()["check_id"])
+                self.assertEqual(restarted["check_status"], "failed")
+                self.assertEqual(restarted["check_error_code"], "CHECK_INTERRUPTED")
+                self.assertEqual(restarted["observed_at"], previous["observed_at"])
+                self.assertEqual(restarted["last_success"], previous["last_success"])
+                release.set()
+                await asyncio.wait_for(self.app.state.management.check_task, timeout=2)
+        finally:
+            release.set()
+
+    async def test_check_is_not_accepted_if_pending_identity_cannot_be_persisted(self):
+        with patch.object(self.app.state.management, "begin_check", side_effect=OSError("private storage detail")):
+            response = await self.client.post("/authorization/check", json={}, headers=self.headers())
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"code": "STORAGE_UNAVAILABLE"})
+        self.assertIsNone(self.app.state.management.check_task)
+        self.assertEqual(self.cli.calls, [])
+
+    async def test_provider_pages_are_independent_of_journal_and_recent_snapshot(self):
+        await self.check()
+        recent = self.app.state.management.transaction_snapshot()["last_success"]
+        original = self.cli.run
+        def pages(args, timeout=60):
+            if args[:2] == ["account", "transactions"]:
+                return {"items": [{"action": "grant", "credits": 7, "created_at": "2026-10-01T00:00:00Z"}],
+                        "has_more": False, "next_cursor": None}
+            return original(args, timeout)
+        with patch.object(self.cli, "run", side_effect=pages) as cli:
+            result = (await self.client.post("/transactions/query", json={"cursor": "provider-page", "page_size": 3},
+                                             headers=self.headers())).json()
+            self.assertIn((["account", "transactions", "--size", "3", "--cursor", "provider-page"],),
+                          [call.args for call in cli.call_args_list])
+        self.assertEqual(result["last_success"]["items"][0]["credits"], "7")
+        self.assertEqual(result["last_success"]["pagination"], {"status": "known", "next_cursor": None, "has_more": False})
+        self.assertEqual(result["last_success"]["coverage"]["kind"], "provider_page")
+        self.assertEqual(self.app.state.management.transaction_snapshot()["last_success"], recent)
+        with patch.object(self.cli, "run", side_effect=ProviderError("provider_timeout")):
+            failed = (await self.client.post("/transactions/query", json={"cursor": "provider-page", "page_size": 3},
+                                             headers=self.headers())).json()
+            other = (await self.client.post("/transactions/query", json={"cursor": "other-page", "page_size": 3},
+                                            headers=self.headers())).json()
+        self.assertEqual(failed["last_success"], result["last_success"])
+        self.assertTrue(failed["stale"])
+        self.assertEqual(failed["error_code"], "PROVIDER_TIMEOUT")
+        self.assertIsNone(other["last_success"])
+        calls = len(self.cli.calls)
+        usage = await self.client.post("/usage/query", json={"page_size": 1}, headers=self.headers())
+        self.assertEqual(usage.status_code, 200)
+        self.assertEqual(len(self.cli.calls), calls)
+        self.assertEqual(self.gateway.limits()["submitted_count"], 0)
+
+    async def test_provider_query_rejects_unbounded_or_unknown_arguments_before_cli(self):
+        for body in [{"page_size": 101}, {"page_size": True}, {"cursor": ""}, {"cursor": "x" * 2049},
+                     {"cursor": "line\nvalue"}, {"cursor": "\u754c" * 1000}, {"role": "admin"}]:
+            with self.subTest(body_keys=list(body)):
+                response = await self.client.post("/transactions/query", json=body, headers=self.headers())
+                self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.cli.calls, [])
 
 
 if __name__ == "__main__":

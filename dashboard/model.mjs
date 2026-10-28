@@ -2,6 +2,52 @@ export function errorCode(error) {
   return error?.code || error?.message || 'REQUEST_UNAVAILABLE';
 }
 
+export function observationStale(snapshot, now = Date.now()) {
+  const observed = Date.parse(snapshot?.last_success?.observed_at || '');
+  const failedWithoutNewObservation = snapshot?.check_status === 'failed' && snapshot?.last_success?.check_id !== snapshot.check_id;
+  return snapshot?.stale !== false || failedWithoutNewObservation || !Number.isFinite(observed) || now - observed > 300000;
+}
+
+export function authorizationCheckState(authorization, checkId, transactions) {
+  if (!checkId) return {terminal:false, state:'not_checked'};
+  if (authorization?.check_id !== checkId || !['completed', 'failed'].includes(authorization.check_status)) {
+    return {terminal:false, state:'pending'};
+  }
+  const balance = authorization.status === 'authorized' && !authorization.error_code && authorization.last_success?.check_id === checkId;
+  const transactionKnown = transactions?.check_id === checkId;
+  const transaction = transactionKnown && transactions.status === 'observed' && !transactions.error_code && transactions.last_success?.check_id === checkId;
+  return {terminal:true, state:authorization.check_status === 'failed' ? 'failed' : balance && transaction ? 'succeeded' : 'partial',
+    balance, transactions:transactionKnown ? transaction : null, error_code:authorization.check_error_code || null};
+}
+
+export function transactionSummary(items) {
+  if (!Array.isArray(items)) return {count:null, debit:null, credit:null, unknown:null};
+  function total(direction) {
+    const amounts = items.filter(item => item.direction === direction).map(item => item.credits);
+    const parsed = amounts.map(value => {
+      const match = typeof value === 'string' && /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(value);
+      if (!match || Math.abs(Number(match[4] || 0)) > 1000) return null;
+      const scale = (match[3] || '').length - Number(match[4] || 0);
+      const coefficient = BigInt(match[1] + match[2] + (match[3] || ''));
+      return {coefficient:scale < 0 ? coefficient * 10n ** BigInt(-scale) : coefficient,scale:Math.max(0,scale)};
+    });
+    if (parsed.some(value => value === null)) return null;
+    const scale = Math.max(0, ...parsed.map(value => value.scale));
+    const sum = parsed.reduce((result, value) => result + value.coefficient * 10n ** BigInt(scale - value.scale), 0n);
+    const digits = (sum < 0n ? -sum : sum).toString().padStart(scale + 1, '0');
+    return (sum < 0n ? '-' : '') + (scale ? `${digits.slice(0, -scale)}.${digits.slice(-scale)}`.replace(/\.?0+$/, '') : digits);
+  }
+  return {count:items.length, debit:total('debit'), credit:total('credit'),
+    unknown:items.filter(item => !['credit', 'debit'].includes(item.direction)).length};
+}
+
+export function transactionNextCursor(snapshot, visited = []) {
+  const pagination = snapshot?.last_success?.pagination;
+  if (snapshot?.status !== 'observed' || pagination?.status !== 'known' || pagination.has_more === false) return null;
+  const next = pagination.next_cursor;
+  return typeof next === 'string' && next.length > 0 && !visited.includes(next) ? next : null;
+}
+
 export function logSettlement(item) {
   if (item.settlement?.amount != null) return `${item.settlement.amount} ${item.settlement.unit}`;
   return ['completed', 'failed', 'rejected', 'cancelled'].includes(item.state) ? '未知' : '待结算';
@@ -86,13 +132,14 @@ export function accountView(account, authorization = {}) {
   const r = account.registration || {}, known = value => value !== null && value !== undefined && value !== '';
   return {
     name: account.name, status: account.status === 'active' ? '启用' : account.status === 'disabled' ? '禁用' : '已删除',
-    tier: r.membership_tier || authorization.last_success?.plan || '未登记',
+    tier: r.membership_tier || '未登记',
     price: known(r.monthly_price_usd) ? `US$${r.monthly_price_usd}／月` : '',
     credits: known(r.remaining_credits) ? `${r.remaining_credits}${known(r.monthly_credits) ? ' / ' + r.monthly_credits : ''} Credits` : '未登记',
     quota: !known(r.remaining_credits) && known(r.monthly_credits) ? `月度配额 ${r.monthly_credits} Credits` : '',
     expiry: r.membership_expiry || '未提供',
     concurrency: `${r.video_concurrency ?? '未登记'} 视频 · ${r.image_concurrency ?? '未登记'} 图片`,
-    providerBalance: authorization.last_success ? `${authorization.last_success.balance_credits} Credits` : '未知',
+    providerBalance: known(authorization.last_success?.balance_credits) ? `${authorization.last_success.balance_credits} Credits` : '未知',
+    providerPlan: authorization.last_success?.plan || '套餐未知',
   };
 }
 export const registrationFields = ['membership_tier', 'membership_expiry', 'monthly_price_usd',

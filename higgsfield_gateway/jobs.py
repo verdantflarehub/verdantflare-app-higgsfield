@@ -10,6 +10,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import sqlite3
 import threading
 import uuid
@@ -29,6 +30,12 @@ class GatewayError(RuntimeError):
 
 def now():
     return datetime.now(UTC).isoformat()
+
+
+def valid_transaction_cursor(value):
+    return (isinstance(value, str) and bool(value) and
+            not any(ord(char) < 32 or ord(char) == 127 or 0xD800 <= ord(char) <= 0xDFFF for char in value) and
+            len(value.encode("utf-8")) <= 2048)
 
 
 class Gateway:
@@ -181,10 +188,20 @@ class Gateway:
 
     def transactions(self):
         """Recent account snapshot, never an inferred task-level charge."""
+        return self.transaction_page()["items"]
+
+    def transaction_page(self, cursor=None, page_size=20):
+        """One actual provider page; local journal cursors never enter this call."""
+        if (type(page_size) is not int or not 1 <= page_size <= 100 or
+                cursor is not None and not valid_transaction_cursor(cursor)):
+            raise GatewayError("invalid_request", 422)
         with self._lock:
             self.check_binding()
-            data = self.cli.run(["account", "transactions", "--size", "20"])
-            if not isinstance(data, dict) or not isinstance(data.get("items"), list) or len(data["items"]) > 20:
+            args = ["account", "transactions", "--size", str(page_size)]
+            if cursor is not None:
+                args.extend(["--cursor", cursor])
+            data = self.cli.run(args)
+            if not isinstance(data, dict) or not isinstance(data.get("items"), list) or len(data["items"]) > page_size:
                 raise ProviderError("provider_protocol_error")
             items = []
             for item in data["items"]:
@@ -196,12 +213,46 @@ class Gateway:
                     created = datetime.fromisoformat(item["created_at"])
                     if created.tzinfo is None:
                         raise ValueError
-                    items.append({"action": item.get("action") if item.get("action") in ("grant", "spend") else "other",
+                    action = item.get("action") if item.get("action") in ("grant", "spend") else "other"
+                    items.append({"action": action,
+                                  "direction": {"grant": "credit", "spend": "debit"}.get(action, "unknown"),
                                   "created_at": created.astimezone(UTC).isoformat(),
-                                  "credits": str(Decimal(str(item["credits"])))})
+                                  "credits": str(Decimal(str(item["credits"]))),
+                                  "source": "provider_transactions"})
                 except (ValueError, TypeError, OverflowError):
                     raise ProviderError("provider_protocol_error") from None
-            return items
+            # Only explicitly returned pagination facts are interpreted. A short
+            # page or an absent field is never evidence of the end of history.
+            next_cursor, has_more = data.get("next_cursor"), data.get("has_more")
+            if next_cursor == "":
+                next_cursor = None
+            if "next_cursor" in data and next_cursor is not None and not valid_transaction_cursor(next_cursor):
+                raise ProviderError("provider_protocol_error")
+            if "has_more" in data and type(has_more) is not bool:
+                raise ProviderError("provider_protocol_error")
+            if has_more is False and next_cursor is not None or has_more is True and "next_cursor" in data and next_cursor is None:
+                raise ProviderError("provider_protocol_error")
+            pagination = {"status": "known" if next_cursor is not None or "has_more" in data else "unknown",
+                          "next_cursor": next_cursor, "has_more": has_more}
+
+            def field_types(values):
+                # Diagnostic schema only: no unknown supplier values, prompts,
+                # account identifiers or arbitrary dynamic keys are returned.
+                fields = {}
+                for value in values:
+                    for key, entry in value.items():
+                        if (not isinstance(key, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
+                                or re.search(r"token|secret|password|credential|authorization|email", key)):
+                            continue
+                        kind = ("null" if entry is None else "boolean" if type(entry) is bool else
+                                "number" if type(entry) in (int, float) else "string" if isinstance(entry, str) else
+                                "array" if isinstance(entry, list) else "object" if isinstance(entry, dict) else "unknown")
+                        fields.setdefault(key, set()).add(kind)
+                return [{"name": key, "type": "|".join(sorted(fields[key]))} for key in sorted(fields)[:32]]
+
+            return {"items": items, "pagination": pagination,
+                    "coverage": {"kind": "recent_window" if cursor is None else "provider_page", "page_size": page_size},
+                    "schema": {"fields": field_types([data]), "item_fields": field_types(data["items"])}}
 
     @contextmanager
     def source(self, generation):

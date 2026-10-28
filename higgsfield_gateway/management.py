@@ -6,6 +6,7 @@ credential lock. This factory alone does not open a listener or start a service.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from decimal import Decimal
 from datetime import datetime
@@ -14,6 +15,7 @@ import json
 import re
 import sqlite3
 import time
+import threading
 import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -35,6 +37,20 @@ class UsageQuery(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     cursor: str | None = Field(default=None, pattern=r"^video_task_[0-9a-f]{32}$")
     page_size: int = Field(default=20, ge=1, le=100)
+
+
+class TransactionsQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    cursor: str | None = Field(default=None, min_length=1, max_length=2048)
+    page_size: int = Field(default=20, ge=1, le=100)
+
+
+def observation_error(error):
+    """Known provider categories only, never raw CLI diagnostics."""
+    codes = {"authorization_required", "workspace_binding_mismatch", "account_access_denied",
+             "provider_timeout", "provider_protocol_error", "provider_output_exceeded",
+             "provider_call_failed", "provider_not_found", "provider_rate_limited", "cli_unavailable"}
+    return error.code.upper() if error.code in codes else "PROVIDER_UNAVAILABLE"
 
 
 def unique_object(pairs):
@@ -68,25 +84,42 @@ class Management:
         self.gateway = gateway
         self.check_task = None
         self.check_id = None
+        self.check_lock = asyncio.Lock()
         self.next_check = 0.0
         self.storage_failed = False
+        self.check_failure = None
+        self.page_cache = OrderedDict()
+        self.page_lock = threading.Lock()
         with gateway.db() as db:
             db.execute("CREATE TABLE IF NOT EXISTS management_observation "
                        "(id INTEGER PRIMARY KEY CHECK(id=1), record TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS management_transactions "
                        "(id INTEGER PRIMARY KEY CHECK(id=1), record TEXT NOT NULL)")
 
-    def authorization(self):
+    def authorization_record(self):
         with self.gateway.db() as db:
             row = db.execute("SELECT record FROM management_observation WHERE id=1").fetchone()
         unconnected = not any((self.gateway.cli.state / name).exists() for name in ("binding.json", "credentials.json"))
-        result = json.loads(row[0]) if row else {
+        return json.loads(row[0]) if row else {
             "status": "unconnected" if unconnected else "unavailable", "observed_at": None, "last_success": None,
             "error_code": "AUTHORIZATION_NOT_CHECKED", "check_id": None,
         }
+
+    def authorization(self):
+        result = self.authorization_record()
         result.update(binding_id=self.gateway.binding, refresh_owner="server",
                       last_refresh_at=last_refresh(self.gateway.cli.state),
                       workspace_matches=(result["status"] == "authorized"))
+        result.setdefault("check_status", "not_checked")
+        result.setdefault("check_error_code", None)
+        if self.check_task is not None and not self.check_task.done():
+            result.update(check_id=self.check_id, check_status="pending", check_error_code=None,
+                          pending_check_id=self.check_id)
+        elif self.check_failure:
+            result.update(check_id=self.check_id, check_status="failed", check_error_code=self.check_failure)
+        elif result["check_status"] == "pending":
+            # A process restart cannot claim the unfinished observation succeeded.
+            result.update(check_status="failed", check_error_code="CHECK_INTERRUPTED")
         # A successful account read is evidence of authorization, not proof of
         # an OAuth rotation. Do not invent a last-refresh timestamp.
         result["stale"] = (result["status"] != "authorized" or result["observed_at"] is None)
@@ -102,57 +135,116 @@ class Management:
             account = self.gateway.account()
             observed_at = now()
             last_success = {"balance_credits": str(Decimal(str(account["credits"]))),
-                            "plan": account["plan"], "observed_at": observed_at}
+                            "plan": account["plan"], "observed_at": observed_at, "check_id": check_id}
             status, code = "authorized", None
         except (GatewayError, ProviderError) as error:
             last_success = previous["last_success"]
             status = "authorization_required" if error.code == "authorization_required" else "unavailable"
             # Provider diagnostics never become App-visible error text.
-            code = "AUTHORIZATION_REQUIRED" if status == "authorization_required" else "AUTHORIZATION_UNAVAILABLE"
+            code = observation_error(error)
             if status == "authorization_required" and previous["status"] == "unconnected":
                 status = "unconnected"
         record = {"status": status, "observed_at": now(), "last_success": last_success,
-                  "error_code": code, "check_id": check_id}
+                  "error_code": code, "check_id": check_id, "check_status": "pending", "check_error_code": None}
         with self.gateway.db() as db:
             db.execute("INSERT INTO management_observation VALUES(1,?) "
                        "ON CONFLICT(id) DO UPDATE SET record=excluded.record", (json.dumps(record),))
-        self.observe_transactions(allowed=(status == "authorized"))
+        transactions = self.observe_transactions(allowed=(status == "authorized"), check_id=check_id,
+                                                 denied_code=code)
+        success = status == "authorized" and transactions["status"] == "observed"
+        record.update(check_status="completed" if success else "failed",
+                      check_error_code=None if success else code or transactions["error_code"])
+        with self.gateway.db() as db:
+            db.execute("INSERT INTO management_observation VALUES(1,?) "
+                       "ON CONFLICT(id) DO UPDATE SET record=excluded.record", (json.dumps(record),))
+
+    def transaction_scope(self):
+        return {"binding_id": self.gateway.binding, "scope": "membership_account", "source": "provider", "unit": "Credits",
+                "workspace_scope": "personal" if self.gateway.workspace == "personal" else "bound_workspace"}
 
     def transaction_snapshot(self):
         with self.gateway.db() as db:
             row = db.execute("SELECT record FROM management_transactions WHERE id=1").fetchone()
         result = json.loads(row[0]) if row else {"status": "not_collected", "observed_at": None,
                                                 "last_success": None}
+        result.update(self.transaction_scope())
+        result.setdefault("check_id", None)
+        result.setdefault("error_code", None)
         result["stale"] = True
         if result["status"] == "observed" and result["last_success"]:
             from datetime import datetime
             result["stale"] = time.time() - datetime.fromisoformat(result["last_success"]["observed_at"]).timestamp() > 300
         return result
 
-    def observe_transactions(self, *, allowed):
+    def observe_transactions(self, *, allowed, check_id, denied_code=None):
         previous = self.transaction_snapshot()
         last_success, status = previous["last_success"], "unavailable"
+        code = denied_code or "AUTHORIZATION_UNAVAILABLE"
         if allowed:
             try:
-                items = self.gateway.transactions()
-                last_success = {"observed_at": now(), "items": items, "window_size": 20}
-                status = "observed"
-            except (GatewayError, ProviderError):
-                pass
-        record = {"status": status, "observed_at": now(), "last_success": last_success}
+                page = self.gateway.transaction_page()
+                last_success = {"observed_at": now(), **page, "window_size": 20, "check_id": check_id}
+                status, code = "observed", None
+            except (GatewayError, ProviderError) as error:
+                code = observation_error(error)
+        record = {"status": status, "observed_at": now(), "last_success": last_success,
+                  "check_id": check_id, "error_code": code}
         with self.gateway.db() as db:
             db.execute("INSERT INTO management_transactions VALUES(1,?) "
                        "ON CONFLICT(id) DO UPDATE SET record=excluded.record", (json.dumps(record),))
+        return record
+
+    def transactions(self, query):
+        # Direct provider pages have their own request identity/cache. In
+        # particular, an old page never overwrites the durable recent snapshot.
+        key = (query.cursor, query.page_size)
+        with self.page_lock:
+            previous = self.page_cache.get(key)
+            last_success = previous["last_success"] if previous else None
+            try:
+                page = self.gateway.transaction_page(query.cursor, query.page_size)
+                last_success = {"observed_at": now(), **page, "window_size": query.page_size, "check_id": None}
+                status, code = "observed", None
+            except ProviderError as error:
+                status, code = "unavailable", observation_error(error)
+            except GatewayError as error:
+                if error.status == 422:
+                    raise
+                status, code = "unavailable", observation_error(error)
+            result = {"status": status, "observed_at": now(), "last_success": last_success,
+                      "check_id": None, "error_code": code, "stale": status != "observed",
+                      **self.transaction_scope()}
+            self.page_cache[key] = result
+            self.page_cache.move_to_end(key)
+            while len(self.page_cache) > 20:
+                self.page_cache.popitem(last=False)
+            return result
 
     async def check(self):
-        if self.check_task is not None and not self.check_task.done():
-            return {"check_id": self.check_id, "status": "pending"}
-        if time.monotonic() < self.next_check:
-            raise GatewayError("authorization_check_throttled", 429)
-        self.check_id = str(uuid.uuid4())
-        self.next_check = time.monotonic() + 15
-        self.check_task = asyncio.create_task(self._run_check(self.check_id))
-        return {"check_id": self.check_id, "status": "pending"}
+        async with self.check_lock:
+            if self.check_task is not None and not self.check_task.done():
+                return {"check_id": self.check_id, "status": "pending"}
+            if time.monotonic() < self.next_check:
+                raise GatewayError("authorization_check_throttled", 429)
+            check_id = str(uuid.uuid4())
+            # Accept only after the new identity is durable. A restart while
+            # account status is still in flight must expose CHECK_INTERRUPTED,
+            # not leave the client waiting forever for an unrecorded check.
+            await run_in_threadpool(self.begin_check, check_id)
+            self.check_id = check_id
+            self.check_failure = None
+            self.next_check = time.monotonic() + 15
+            self.check_task = asyncio.create_task(self._run_check(check_id))
+            return {"check_id": check_id, "status": "pending"}
+
+    def begin_check(self, check_id):
+        record = self.authorization_record()
+        record.update(check_id=check_id, check_status="pending", check_error_code=None)
+        # Starting work is not a new account observation. Keep both the last
+        # attempt time and the successful balance's timestamp unchanged.
+        with self.gateway.db() as db:
+            db.execute("INSERT INTO management_observation VALUES(1,?) "
+                       "ON CONFLICT(id) DO UPDATE SET record=excluded.record", (json.dumps(record),))
 
     async def _run_check(self, check_id):
         try:
@@ -161,8 +253,15 @@ class Management:
             # No raw storage error or path is returned. The previous observation
             # remains valid only as a timestamped snapshot.
             self.storage_failed = True
+            self.check_failure = "STORAGE_UNAVAILABLE"
+        except Exception:
+            # An internal failure must finish this check without publishing an
+            # old successful check or exposing an exception's private details.
+            self.storage_failed = False
+            self.check_failure = "CHECK_FAILED"
         else:
             self.storage_failed = False
+            self.check_failure = None
 
     def usage(self, query):
         with self.gateway.db() as db:
@@ -177,8 +276,10 @@ class Management:
                           "quoted_credits": str(Decimal(str(job["quoted_credits"]))),
                           "provider_charge": None, "reconciliation_status": "unreconciled"})
         snapshot = self.transaction_snapshot()
+        authorization = self.authorization()
         return {"items": items, "next_cursor": page[-1][0] if len(rows) > query.page_size else None,
-                "provider_transactions_status": snapshot["status"], "provider_transactions": snapshot}
+                "provider_transactions_status": snapshot["status"], "provider_transactions": snapshot,
+                **{key: authorization.get(key) for key in ("check_id", "check_status", "check_error_code", "pending_check_id")}}
 
     def calls(self, query):
         if set(query) - {'search', 'state', 'offset', 'limit', 'media', 'account_id', 'created_from', 'created_before'}:
@@ -317,12 +418,11 @@ def create_management_app(gateway, *, token, execution_token, station_id, assets
             elif path == "/usage/query":
                 query = UsageQuery.model_validate(await read_body(request))
                 result = await run_in_threadpool(management.usage, query)
+            elif path == "/transactions/query":
+                query = TransactionsQuery.model_validate(await read_body(request))
+                result = await run_in_threadpool(management.transactions, query)
             else:
                 result = await run_in_threadpool(management.authorization)
-                if getattr(management, "storage_failed", False):
-                    result.update(status="unavailable", stale=True, error_code="STORAGE_UNAVAILABLE")
-                if management.check_task is not None and not management.check_task.done():
-                    result["pending_check_id"] = management.check_id
                 if path == "/overview":
                     limits = await run_in_threadpool(gateway.limits)
                     channel = (await run_in_threadpool(video_channel.read) if video_channel is not None else
@@ -343,6 +443,7 @@ def create_management_app(gateway, *, token, execution_token, station_id, assets
         Route('/accounts/{account_id}', handle, methods=['GET', 'PATCH', 'DELETE']),
         Route('/calls/search', handle, methods=['POST']),
         Route("/authorization/check", handle, methods=["POST"]),
+        Route("/transactions/query", handle, methods=["POST"]),
         Route("/usage/query", handle, methods=["POST"]), Route("/limits", handle, methods=["GET", "PUT"]),
         Route("/internal/dashboard-declaration", handle), Route("/internal/dashboard-index", handle),
         Route("/internal/dashboard/{asset:path}", handle)],
