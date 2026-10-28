@@ -15,7 +15,7 @@ const authorization = {status:'authorized',check_id:'check-one',check_status:'co
 const overview = {authorization,limits:{binding_id:'team',revision:1,credit_limit:'50',submission_limit:10,reserved_credits:'0',submitted_count:0}};
 const account = {account_id:'team',name:'会员',status:'active',revision:1,registration:{}};
 
-function fixture(respond) {
+function fixture(respond, clock = null) {
   const nodes = new Map(), calls = [];
   function node(id) {
     if (!nodes.has(id)) nodes.set(id, {value:'',textContent:'',hidden:false,disabled:false,children:[],attributes:{},
@@ -25,7 +25,8 @@ function fixture(respond) {
     return nodes.get(id);
   }
   const root = {querySelector:selector=>node(selector.slice(1)),getBoundingClientRect:()=>({height:400})};
-  const context = vm.createContext({...model,AbortController,structuredClone,setTimeout:()=>0,clearTimeout(){},
+  const context = vm.createContext({...model,AbortController,structuredClone,
+    ...(clock ? {Date:clock.Date,setTimeout:clock.setTimeout,clearTimeout:clock.clearTimeout} : {setTimeout:()=>0,clearTimeout(){}}),
     document:{getElementById:()=>root,createElement:()=>({textContent:'',children:[],append(child){this.children.push(child);},get firstChild(){return this.children[0];}})},
     window:{$wujie:{props:{appSDK:{app:{request:async input=>{
       calls.push(structuredClone(input)); const result = await respond(input);
@@ -36,6 +37,24 @@ function fixture(respond) {
   context.initial = {overview:structuredClone(overview),account:structuredClone(account)};
   vm.runInContext('overview = initial.overview; account = initial.account;',context);
   return {node,calls,run:source=>vm.runInContext(source,context)};
+}
+
+function fakeClock(start) {
+  let now = start, sequence = 0;
+  const timers = new Map();
+  return {Date:class extends Date {static now(){return now;}},
+    setTimeout(callback,delay){const id=++sequence;timers.set(id,{callback,due:now+delay});return id;},
+    clearTimeout(id){timers.delete(id);},
+    get pending(){return timers.size;},
+    advance(milliseconds){
+      const target=now+milliseconds;
+      for (;;) {
+        const next=[...timers].filter(([,timer])=>timer.due<=target).sort((a,b)=>a[1].due-b[1].due)[0];
+        if(!next) break;
+        timers.delete(next[0]); now=next[1].due; next[1].callback();
+      }
+      now=target;
+    }};
 }
 
 test('provider window uses exact decimal direction totals and never infers direction from an amount', () => {
@@ -150,4 +169,67 @@ test('a late overview success cannot reopen a view after provider management acc
   const count=f.calls.length;
   await f.run('refresh()'); await f.run('loadUsage()'); await f.run('loadTransactions()');
   assert.equal(f.calls.length,count);
+});
+
+test('idle balance and provider windows expire independently without polling or replacing loading state', () => {
+  const base=Date.parse(observedAt), clock=fakeClock(base+60000);
+  const f=fixture(()=>{throw Error('no network expected');},clock);
+  f.run(`transactions = ${JSON.stringify(snapshot())}; transactions.last_success.observed_at = ${JSON.stringify(new Date(base+60000).toISOString())}; readsStopped=true; renderAccount(); renderTransactions();`);
+  f.node('transactionsState').textContent='正在读取供应商流水…';
+  f.node('transactionsNext').disabled=true;
+  const observed=f.node('transactionsObserved').textContent, rows=f.node('transactions').children;
+  clock.advance(240000);
+  assert.equal(f.node('balanceStale').textContent,'最近有效观测');
+  clock.advance(1);
+  assert.equal(f.node('balanceStale').textContent,'过期观测');
+  assert.equal(f.node('transactionsStale').textContent,'最近有效观测');
+  clock.advance(60000);
+  assert.equal(f.node('transactionsStale').textContent,'过期观测');
+  assert.match(f.node('transactionsFreshness').textContent,/已过期/);
+  assert.equal(f.node('transactionsState').textContent,'正在读取供应商流水…');
+  assert.equal(f.node('transactionsNext').disabled,true);
+  assert.equal(f.node('transactionsObserved').textContent,observed);
+  assert.equal(f.node('transactions').children,rows);
+  assert.equal(f.calls.length,0); assert.equal(clock.pending,0);
+});
+
+test('local expiration preserves a failed page request and does not start another provider request', async () => {
+  const clock=fakeClock(Date.parse(observedAt)); let fail=false;
+  const f=fixture(()=>{if(fail)throw Error('NETWORK_TIMEOUT');return snapshot();},clock);
+  await f.run('loadTransactions()'); fail=true; await f.run('loadTransactions()');
+  const message=f.node('transactionsState').textContent, calls=f.calls.length;
+  clock.advance(300001);
+  assert.equal(f.node('transactionsState').textContent,message);
+  assert.match(message,/NETWORK_TIMEOUT/);
+  assert.equal(f.node('balanceStale').textContent,'过期观测');
+  assert.equal(f.node('transactionsStale').textContent,'过期观测');
+  assert.equal(f.calls.length,calls);
+});
+
+test('hidden views stop expiration timers and active views immediately re-evaluate retained observations', () => {
+  const clock=fakeClock(Date.parse(observedAt));
+  const f=fixture(()=>{throw Error('no network expected');},clock);
+  f.run(`transactions = ${JSON.stringify(snapshot())}; renderTransactions();`);
+  assert.equal(clock.pending,1);
+  f.run('setVisible(false)'); assert.equal(clock.pending,0);
+  clock.advance(300001);
+  assert.equal(f.node('transactionsStale').textContent,'最近有效观测');
+  f.run('setVisible(true)');
+  assert.equal(f.node('transactionsStale').textContent,'过期观测');
+  assert.equal(f.node('balanceStale').textContent,'过期观测');
+  assert.equal(clock.pending,0); assert.equal(f.calls.length,0);
+});
+
+test('permission loss or disposal prevents expiration callbacks from updating retained data', () => {
+  for (const stop of ['failure({status:403,code:"MANAGEMENT_DENIED"}, "")', 'disposed=true; updateObservationFreshness()']) {
+    const clock=fakeClock(Date.parse(observedAt));
+    const f=fixture(()=>{throw Error('no network expected');},clock);
+    f.run(`transactions = ${JSON.stringify(snapshot())}; renderTransactions();`);
+    assert.equal(clock.pending,1);
+    f.run(stop); assert.equal(clock.pending,0);
+    const message=f.node('transactionsStale').textContent;
+    clock.advance(300001); f.run('updateObservationFreshness()');
+    assert.equal(f.node('transactionsStale').textContent,message);
+    assert.equal(clock.pending,0); assert.equal(f.calls.length,0);
+  }
 });

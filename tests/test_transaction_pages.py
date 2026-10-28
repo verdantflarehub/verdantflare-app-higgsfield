@@ -26,22 +26,51 @@ class TransactionPagesTest(unittest.TestCase):
             return self.gateway.transaction_page(**kwargs)
 
     def test_short_empty_and_null_cursor_pages_do_not_invent_end_of_history(self):
-        for payload in ({"items": []}, {"items": [], "next_cursor": None}, {"items": [], "next_cursor": ""}):
+        for payload in ({"items": []}, {"items": [], "next_cursor": None}, {"items": [], "next_cursor": ""},
+                        {"items": [], "cursor": None}, {"items": [], "cursor": ""},
+                        {"items": [], "cursor": None, "next_cursor": ""}):
             with self.subTest(payload=payload):
                 page = self.read(payload)
                 self.assertEqual(page["items"], [])
                 self.assertEqual(page["pagination"], {"status": "unknown", "next_cursor": None, "has_more": None})
 
     def test_explicit_cursor_is_preserved_without_inventing_other_pagination_facts(self):
-        page = self.read({"items": [], "next_cursor": "opaque+/page=="})
-        self.assertEqual(page["pagination"], {"status": "known", "next_cursor": "opaque+/page==", "has_more": None})
+        for paging in ({"cursor": "opaque+/page=="}, {"next_cursor": "opaque+/page=="},
+                       {"cursor": "opaque+/page==", "next_cursor": "opaque+/page=="}):
+            page = self.read({"items": [], **paging})
+            self.assertEqual(page["pagination"], {"status": "known", "next_cursor": "opaque+/page==", "has_more": None})
         page = self.read({"items": [], "has_more": False})
         self.assertEqual(page["pagination"], {"status": "known", "next_cursor": None, "has_more": False})
+
+    def test_observed_provider_schema_preserves_candidate_cursor_without_exposing_display_name(self):
+        page = self.read({"cursor": "opaque/second-page=", "items": [
+            {"action": "spend", "created_at": "2026-10-28T09:00:00+08:00", "credits": -10,
+             "display_name": "private prompt or unverified model label"}]})
+        self.assertEqual(page["pagination"]["next_cursor"], "opaque/second-page=")
+        self.assertIsNone(page["pagination"]["has_more"])
+        self.assertEqual(page["items"][0]["direction"], "debit")
+        self.assertEqual(page["items"][0]["credits"], "-10")
+        self.assertNotIn("private prompt or unverified model label", str(page))
+        self.assertIn({"name": "display_name", "type": "string"}, page["schema"]["item_fields"])
+
+    def test_candidate_cursor_is_forwarded_unchanged_using_verified_cli_option(self):
+        original = self.cli.run
+        def reply(args, timeout=60):
+            return {"items": [], "cursor": None} if args[:2] == ["account", "transactions"] else original(args, timeout)
+        with patch.object(self.cli, "run", side_effect=reply) as run:
+            page = self.gateway.transaction_page(cursor="opaque+/second==", page_size=7)
+        run.assert_any_call(["account", "transactions", "--size", "7", "--cursor", "opaque+/second=="])
+        self.assertEqual(page["coverage"], {"kind": "provider_page", "page_size": 7})
+        self.assertEqual(page["pagination"]["status"], "unknown")
 
     def test_malformed_or_contradictory_provider_pagination_is_not_a_valid_page(self):
         for paging in ({"next_cursor": 1}, {"next_cursor": "bad\nvalue"}, {"next_cursor": "\ud800"},
                        {"next_cursor": "x" * 2049}, {"has_more": "false"}, {"has_more": 0},
-                       {"has_more": True, "next_cursor": None}, {"has_more": False, "next_cursor": "next"}):
+                       {"has_more": True, "next_cursor": None}, {"has_more": False, "next_cursor": "next"},
+                       {"cursor": 1}, {"cursor": "bad\nvalue"}, {"cursor": "\ud800"}, {"cursor": "x" * 2049},
+                       {"cursor": "actual", "next_cursor": "different"},
+                       {"cursor": None, "next_cursor": "legacy"}, {"cursor": "actual", "next_cursor": None},
+                       {"has_more": True, "cursor": None}, {"has_more": False, "cursor": "next"}):
             with self.subTest(keys=list(paging)):
                 with self.assertRaisesRegex(ProviderError, "provider_protocol_error"):
                     self.read({"items": [], **paging})

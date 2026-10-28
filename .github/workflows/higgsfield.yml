@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 env:
   SERVICE: video-higgsfield-gateway
-  VERSION: 0.5.12
+  VERSION: 0.5.13
 jobs:
   build:
     if: github.ref == 'refs/heads/release'

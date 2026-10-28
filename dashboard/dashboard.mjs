@@ -4,7 +4,7 @@ const root = document.getElementById('dashboard'), $ = id => root.querySelector(
 const {appSDK: sdk, dashboardHost: bridge} = window.$wujie?.props || {};
 const pages = new Set(['overview', 'authorization', 'usage', 'account']);
 const authNames = {authorized: '已授权', unconnected: '未连接', authorization_required: '需重新授权', unavailable: '暂时无法观测'};
-let disposed = false, visible = true, overview = null, timer, reader, readVersion = 0;
+let disposed = false, visible = true, overview = null, timer, observationTimer, reader, readVersion = 0;
 let readFailures = 0, readsStopped = false;
 let dirty = false, editor, usageCursor = null, usageNext = null, usageReader, usageTotal = 0, usageFilters = {};
 let account = null, editingAccount = null, accountDirty = false, accountBusy = false, currentPage = "overview";
@@ -17,11 +17,34 @@ const text = (id, value) => { $(id).textContent = value ?? '—'; };
 const time = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN') : '尚无观测';
 function size() { if (!disposed) bridge?.resize?.(Math.ceil(root.getBoundingClientRect().height)); }
 function notice(value) { text('message', value); $('message').hidden = !value; size(); }
+function stopObservationTimer() { clearTimeout(observationTimer); observationTimer = undefined; }
+function updateObservationFreshness() {
+  stopObservationTimer();
+  if (!visible || disposed || managementDenied) return;
+  const now = Date.now();
+  let nextExpiry = null;
+  for (const [snapshot, id] of [[overview?.authorization, 'balanceStale'], [transactions, 'transactionsStale']]) {
+    const success = snapshot?.last_success, stale = observationStale(snapshot, now);
+    text(id, success ? stale ? '过期观测' : '最近有效观测' : '尚无有效观测');
+    if (id === 'transactionsStale') text('transactionsFreshness', success && stale ? '当前窗口已过期，请刷新官方数据。' : '');
+    if (success && !stale) {
+      // The inclusive 300-second window expires at the following millisecond.
+      const expires = Date.parse(success.observed_at) + 300001;
+      nextExpiry = nextExpiry === null ? expires : Math.min(nextExpiry, expires);
+    }
+  }
+  if (nextExpiry !== null) observationTimer = setTimeout(updateObservationFreshness, Math.max(1, Math.min(2147483647, nextExpiry - now)));
+  size();
+}
+function setVisible(value) {
+  visible = value;
+  if (visible) updateObservationFreshness(); else stopObservationTimer();
+}
 function denied(error) { return error.status === 401 || error.status === 403 || /DENIED|UNAUTHORIZED|SESSION_EXPIRED/.test(errorCode(error)); }
 function failure(error, message) {
   if (disposed) return;
   if (denied(error)) {
-    managementDenied = true; readsStopped = true; ++readVersion; clearTimeout(timer);
+    managementDenied = true; readsStopped = true; ++readVersion; clearTimeout(timer); stopObservationTimer();
     reader?.abort(); usageReader?.abort(); transactionsReader?.abort(); transactions = null;
     overview = null; account = null; editingAccount = null; $('business').hidden = true;
     notice('当前身份无权管理此渠道，或会话已失效。请从应用中心重新打开。');
@@ -138,10 +161,9 @@ function renderTransactions() {
     }
     $('transactions').append(row);
   }
-  const stale = observationStale(transactions);
   text('transactionsState', transactions?.error_code ? `流水查询失败：${transactions.error_code}。${success ? '保留最后成功窗口，数据已过期。' : '当前流水不可用。'}` :
     transactions?.status === 'unavailable' ? `流水当前不可用。${success ? '保留最后成功窗口，数据已过期。' : '尚无成功窗口。'}` :
-    !success ? '尚未取得官方流水，请刷新官方数据。' : stale ? '当前窗口已过期，请刷新官方数据。' : items.length ? '当前窗口由官方查询返回；未提供稳定任务关联的记录保持待对账。' : '官方返回的当前窗口没有流水记录。');
+    !success ? '尚未取得官方流水，请刷新官方数据。' : items.length ? '当前窗口由官方查询返回；未提供稳定任务关联的记录保持待对账。' : '官方返回的当前窗口没有流水记录。');
   transactionNext = transactionNextCursor(transactions, transactionCursors.slice(0, transactionPage + 1));
   const pagination = success?.pagination;
   text('transactionsPagination', !success || pagination?.status !== 'known' ? '供应商未提供可确认的分页状态，历史范围未知。' :
@@ -150,7 +172,7 @@ function renderTransactions() {
   text('transactionsRange', success ? `供应商第 ${transactionPage + 1} 页 · ${items?.length ?? 0} 条` : '尚未读取');
   $('transactionsPrevious').disabled = transactionPage === 0;
   $('transactionsNext').disabled = !transactionNext;
-  size();
+  updateObservationFreshness();
 }
 
 async function loadTransactions({page = transactionPage, snapshot = false} = {}) {
@@ -256,7 +278,6 @@ function renderAccount() {
   const view = accountView(account, overview.authorization);
   for (const [id, key] of Object.entries({accountName:'name',accountStatus:'status',membershipTier:'tier',membershipPrice:'price',membershipCredits:'credits',membershipQuota:'quota',membershipExpiry:'expiry',membershipConcurrency:'concurrency',providerBalance:'providerBalance',providerPlan:'providerPlan'})) text(id, view[key]);
   const authorization = overview.authorization, stale = observationStale(authorization);
-  text('balanceStale', authorization.last_success ? stale ? '过期观测' : '最近有效观测' : '尚无有效观测');
   text('balanceObserved', authorization.last_success?.observed_at ? time(authorization.last_success.observed_at) : '尚无成功记录');
   text('balanceAttempt', authorization.observed_at ? time(authorization.observed_at) : '尚无记录');
   text('balanceScope', authorization.workspace_matches ? '当前绑定会员工作区 · 已确认' : '当前绑定会员工作区 · 待确认');
@@ -266,6 +287,7 @@ function renderAccount() {
   $('accountToggle').title = label; $('accountToggle').setAttribute('aria-label', label);
   for (const id of ['accountEdit', 'accountToggle', 'accountDelete']) $(id).disabled = accountBusy;
   if (currentPage === 'account' && !editingAccount) fillAccount();
+  updateObservationFreshness();
 }
 function fillAccount(force = false) {
   if (!account || (editingAccount && !force)) return;
@@ -407,15 +429,15 @@ if (!sdk?.app || !sdk?.theme || !sdk?.navigation?.get || !bridge) {
   const resize = new ResizeObserver(size); resize.observe(root);
   function dispose() {
     if (disposed) return;
-    disposed = true; clearTimeout(timer); reader?.abort(); usageReader?.abort(); transactionsReader?.abort(); events.abort(); resize.disconnect();
+    disposed = true; clearTimeout(timer); stopObservationTimer(); reader?.abort(); usageReader?.abort(); transactionsReader?.abort(); events.abort(); resize.disconnect();
     for (const stop of unsubscribe) stop();
     for (const id of ['reload', 'connect', 'copy', 'check', 'usageFirst', 'usagePrevious', 'usageNext', 'transactionsReload', 'transactionsRefresh', 'transactionsFirst', 'transactionsPrevious', 'transactionsNext']) $(id).onclick = null;
     $('business').hidden = true; overview = null; transactions = null;
   }
   unsubscribe.push(sdk.lifecycle.subscribe(event => {
     if (event === 'dispose') { dispose(); return; }
-    if (event === 'hidden') { visible = false; ++readVersion; clearTimeout(timer); reader?.abort(); usageReader?.abort(); transactionsReader?.abort(); }
-    if (event === 'active') { visible = true; void refresh(true); route(sdk.navigation.get()); }
+    if (event === 'hidden') { setVisible(false); ++readVersion; clearTimeout(timer); reader?.abort(); usageReader?.abort(); transactionsReader?.abort(); }
+    if (event === 'active') { setVisible(true); void refresh(true); route(sdk.navigation.get()); }
   }));
   route(sdk.navigation.get()); updateEditor(); bridge.ready(); void refresh();
 }

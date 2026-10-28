@@ -223,14 +223,24 @@ class Gateway:
                     raise ProviderError("provider_protocol_error") from None
             # Only explicitly returned pagination facts are interpreted. A short
             # page or an absent field is never evidence of the end of history.
-            next_cursor, has_more = data.get("next_cursor"), data.get("has_more")
-            if next_cursor == "":
-                next_cursor = None
-            if "next_cursor" in data and next_cursor is not None and not valid_transaction_cursor(next_cursor):
+            # The observed CLI schema names its candidate next-page token
+            # `cursor`; retain compatibility with explicit `next_cursor`.
+            cursors = []
+            for key in ("cursor", "next_cursor"):
+                if key not in data:
+                    continue
+                value = data[key]
+                if value == "":
+                    value = None
+                if value is not None and not valid_transaction_cursor(value):
+                    raise ProviderError("provider_protocol_error")
+                cursors.append(value)
+            if len(cursors) == 2 and cursors[0] != cursors[1]:
                 raise ProviderError("provider_protocol_error")
+            next_cursor, has_more = cursors[0] if cursors else None, data.get("has_more")
             if "has_more" in data and type(has_more) is not bool:
                 raise ProviderError("provider_protocol_error")
-            if has_more is False and next_cursor is not None or has_more is True and "next_cursor" in data and next_cursor is None:
+            if has_more is False and next_cursor is not None or has_more is True and cursors and next_cursor is None:
                 raise ProviderError("provider_protocol_error")
             pagination = {"status": "known" if next_cursor is not None or "has_more" in data else "unknown",
                           "next_cursor": next_cursor, "has_more": has_more}
