@@ -84,8 +84,6 @@ class Generation(BaseModel):
             raise ValueError("unsupported_duration")
         if self.aspect_ratio not in model["ratios"]:
             raise ValueError("unsupported_aspect_ratio")
-        if self.model == "seedance_2_5" and self.resolution != "720p":
-            raise ValueError("unsupported_resolution")
         if self.model == "seedance_2_5_draft":
             if self.resolution != "480p":
                 raise ValueError("unsupported_resolution")
@@ -98,7 +96,7 @@ class Generation(BaseModel):
         if bool(self.references) != (self.mode == "reference_to_video"):
             raise ValueError("mode_reference_mismatch")
         if self.references:
-            if self.model not in {"wan3_0", "seedance_2_5_draft"} or self.source:
+            if self.model not in {"wan3_0", "seedance_2_5", "seedance_2_5_draft"} or self.source:
                 raise ValueError("unsupported_references")
             if sum(r.kind == "image" for r in self.references) > 4 or sum(r.kind == "video" for r in self.references) > 1:
                 raise ValueError("unsupported_references")
@@ -110,10 +108,8 @@ class Generation(BaseModel):
         result = ["generate", operation, provider_model(self.model), "--prompt", self.prompt,
                   "--duration", str(self.duration_seconds), "--resolution", self.resolution,
                   "--aspect_ratio", self.aspect_ratio]
-        if self.model == "seedance_2_5":
-            result.extend(["--mode", "t2v"])
-        elif self.model == "seedance_2_5_draft":
-            result.extend(["--mode", "omni_reference", "--draft", "true"])
+        if self.model in {"seedance_2_5", "seedance_2_5_draft"}:
+            result.extend(["--mode", "omni_reference" if self.mode == "reference_to_video" else "t2v"])
         if source_path is not None:
             result.extend(["--start-image", str(source_path)])
         if self.references:

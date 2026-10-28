@@ -34,10 +34,18 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(quote[2:], create[2:])
         self.assertEqual(create[2], "seedance_2_5")
         self.assertEqual(create[create.index("--mode") + 1], "omni_reference")
-        self.assertEqual(create[create.index("--draft") + 1], "true")
         self.assertEqual(create[-4:], ["--image-references", REMOTE, "--video-references", REMOTE])
-        for flag in ("--start-image", "--end-image", "t2v"):
+        for flag in ("--draft", "--start-image", "--end-image", "t2v"):
             self.assertNotIn(flag, create)
+        for resolution in ("480p", "720p"):
+            full_r2v = Generation(model="seedance_2_5", prompt="dance", duration_seconds=4,
+                                  resolution=resolution, mode="reference_to_video", references=[image, video])
+            full_args = full_r2v.arguments("create", media_ids=[REMOTE, REMOTE])
+            self.assertEqual(full_args[full_args.index("--mode") + 1], "omni_reference")
+            self.assertNotIn("--draft", full_args)
+            full_t2v = Generation(model="seedance_2_5", prompt="dance", duration_seconds=4,
+                                  resolution=resolution, mode="text_to_video")
+            self.assertEqual(full_t2v.arguments("create")[full_t2v.arguments("create").index("--mode") + 1], "t2v")
         with patch.object(self.gateway.inputs, "upload", return_value=REMOTE):
             task = request(generation=gen.model_dump())
             self.gateway.submit(task)
@@ -87,7 +95,7 @@ class ReferenceTests(unittest.TestCase):
         bad.update(project_id="0199abcd-0000-7000-8000-000000000004", generation=generation.model_dump())
         with self.assertRaises(ValueError):
             JobRequest.model_validate(bad)
-        for changes in ({"mode": "image_to_video"}, {"model": "seedance_2_5"}, {"references": [ref] * 5}):
+        for changes in ({"mode": "image_to_video"}, {"model": "grok_video_v15_lite"}, {"references": [ref] * 5}):
             with self.assertRaises(ValueError):
                 Generation.model_validate({**generation.model_dump(), **changes})
 
