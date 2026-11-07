@@ -267,7 +267,7 @@ function renderAccount() {
   text('balanceObserved', authorization.last_success?.observed_at ? time(authorization.last_success.observed_at) : '尚无成功记录');
   text('balanceAttempt', authorization.observed_at ? time(authorization.observed_at) : '尚无记录');
   text('balanceScope', authorization.workspace_matches ? '当前绑定会员工作区 · 已确认' : '当前绑定会员工作区 · 待确认');
-  text('balanceState', authorization.error_code ? `余额查询未成功：${authorization.error_code}。${authorization.last_success ? '保留最后成功余额，请刷新官方数据。' : '当前余额不可用。'}` : stale && authorization.last_success ? '余额已超过观测有效期，请刷新官方数据。' : 'Higgsfield 官方余额独立于人工登记、团队限额与本地预留。');
+  text('balanceState', authorization.error_code ? `余额查询未成功：${authorization.error_code}。${authorization.last_success ? '保留最后成功余额，请刷新官方数据。' : '当前余额不可用。'}` : stale && authorization.last_success ? '余额已超过观测有效期，请刷新官方数据。' : '余额来自 Higgsfield 最近一次成功查询。');
   $('disabledNote').hidden = account.status !== 'disabled';
   const label = account.status === 'active' ? '禁用账号' : '启用账号';
   $('accountToggle').title = label; $('accountToggle').setAttribute('aria-label', label);
@@ -330,7 +330,8 @@ function route(value) {
 if (!sdk?.app || !sdk?.theme || !sdk?.navigation?.get || !bridge) {
   notice('请从 Studio 应用中心打开 Higgsfield。');
 } else {
-
+  const context = sdk.context.get();
+  const identity = [context.stationId, context.installationId, context.organizationId, context.userId].join(':');
   document.body.dataset.theme = sdk.theme.get();
   unsubscribe.push(sdk.theme.subscribe(theme => { document.body.dataset.theme = theme; }));
   unsubscribe.push(sdk.navigation.subscribe(route));
