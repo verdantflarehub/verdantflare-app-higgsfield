@@ -1,4 +1,4 @@
-import {createLimitsEditor, errorCode, request, accountView, accountPayload, registrationFields, logSettlement, logQuery, observationStale, authorizationCheckState, transactionSummary, transactionNextCursor} from './model.mjs';
+import {errorCode, request, accountView, accountPayload, registrationFields, logSettlement, logQuery, observationStale, authorizationCheckState, transactionSummary, transactionNextCursor} from './model.mjs';
 
 const root = document.getElementById('dashboard'), $ = id => root.querySelector(`#${id}`);
 const {appSDK: sdk, dashboardHost: bridge} = window.$wujie?.props || {};
@@ -6,7 +6,7 @@ const pages = new Set(['overview', 'authorization', 'usage', 'account']);
 const authNames = {authorized: '已授权', unconnected: '未连接', authorization_required: '需重新授权', unavailable: '暂时无法观测'};
 let disposed = false, visible = true, overview = null, timer, observationTimer, reader, readVersion = 0;
 let readFailures = 0, readsStopped = false;
-let dirty = false, editor, usageCursor = null, usageNext = null, usageReader, usageTotal = 0, usageFilters = {};
+let usageCursor = null, usageNext = null, usageReader, usageTotal = 0, usageFilters = {};
 let account = null, editingAccount = null, accountDirty = false, accountBusy = false, currentPage = "overview";
 let composing = false;
 let logView = 'local', transactions = null, transactionsReader, transactionPage = 0, transactionCursors = [null], transactionNext = null;
@@ -51,34 +51,20 @@ function failure(error, message) {
   } else notice(message);
 }
 function updateEditor() {
-  const state = editor?.snapshot(), pending = state?.pending;
-  $('credits').disabled = $('submissions').disabled = Boolean(pending || state?.busy || !editor);
-  $('save').disabled = !overview || !editor || Boolean(state?.busy);
-  text('save', pending ? '重试原保存请求' : '保存设置');
-  bridge?.setDirty?.(dirty || accountDirty || Boolean(pending));
+  bridge?.setDirty?.(accountDirty);
 }
 function render() {
   if (!overview || disposed || managementDenied) return;
-  const auth = overview.authorization, limits = overview.limits;
+  const auth = overview.authorization;
   $('business').hidden = false;
   text('authState', authNames[auth.status] || '待检查');
   text('authorizationBadge', authNames[auth.status] || '待检查');
   text('authorizationHeading', auth.status === 'authorized' ? '会员已连接到团队' : '检查或恢复会员连接');
   text('workspaceState', auth.workspace_matches ? '与服务器绑定一致' : '等待校验原绑定');
   renderAccount();
-  text('generationState', ({paused: '新增生成已受限额暂停', channel_paused: 'Video 已暂停 Higgsfield 新增生成',
+  text('generationState', ({paused: '账号已停用', channel_paused: 'Video 已暂停 Higgsfield 新增生成',
     not_verified: 'Video 渠道可用性待核验', authorization_unverified: '会员授权待检查，暂不能确认可生成',
     busy: '当前并发名额已占满', eligible: '可以提交，费用与项目权限仍按任务校验'})[overview.generation_status] || '新增生成状态待核验');
-  text('submitted', `${limits.submitted_count} 条`);
-  text('limitsReserved', `${limits.reserved_credits} Credits`);
-  text('revision', limits.revision);
-  const pending = editor?.snapshot().pending;
-  if (pending) {
-    $('credits').value = pending.credit_limit; $('submissions').value = pending.submission_limit;
-    text('saveState', '存在结果尚未确认的保存请求。重试会使用原操作，不会另建修改。');
-  } else if (!dirty) {
-    $('credits').value = limits.credit_limit; $('submissions').value = limits.submission_limit;
-  }
   const checking = Boolean(checkStarting || activeCheckId || auth.pending_check_id);
   $('check').disabled = $('transactionsRefresh').disabled = checking;
   $('accountRefresh').disabled = checking || accountBusy;
@@ -113,7 +99,7 @@ async function refresh(automatic = false) {
     if (disposed || !visible || version !== readVersion) return;
     readFailures++;
     readsStopped = denied(error) || (error.status && error.status !== 429 && error.status < 500) || readFailures > 3;
-    failure(error, readsStopped ? '自动更新已停止。已保留上次数据，请点击重新读取。' : '暂时无法更新渠道状态。已显示的数据可能过期，稍后重试。'); return false;
+    failure(error, readsStopped ? '自动更新已停止。已保留上次数据，请重新进入此页面恢复读取。' : '暂时无法更新渠道状态。已显示的数据可能过期，稍后重试。'); return false;
   } finally {
     if (!disposed && visible && version === readVersion && !readsStopped) {
       const delay = readFailures ? Math.min(600000, 5000 * 2 ** (readFailures - 1) * (.85 + Math.random() * .3)) : activeCheckId || overview?.authorization.pending_check_id ? 2000 : 30000;
@@ -132,7 +118,7 @@ async function startCheck() {
     await refresh();
   } catch (error) {
     if (disposed || managementDenied) return;
-    checkMessage = errorCode(error) === 'AUTHORIZATION_CHECK_THROTTLED' ? '查询过于频繁，请稍后再试。' : `查询尚未确认：${errorCode(error)}。请重新读取当前状态。`;
+    checkMessage = errorCode(error) === 'AUTHORIZATION_CHECK_THROTTLED' ? '查询过于频繁，请稍后再试。' : `查询尚未确认：${errorCode(error)}。请查看当前查询状态或稍后再次查询。`;
     failure(error, checkMessage);
   } finally { checkStarting = false; if (!disposed) render(); }
 }
@@ -324,7 +310,8 @@ function route(value) {
   const selected = ['log', 'logs', 'usage'].includes(incoming) ? 'usage' : ['accounts/new', 'authorization'].includes(incoming) ? 'authorization' : /^accounts\/[^/]+\/edit$/.test(incoming) || incoming === 'limits' ? 'account' : incoming;
   const page = pages.has(selected) ? selected : 'overview';
   currentPage = page;
-  root.querySelectorAll('[data-page]').forEach(el => { el.hidden = el.dataset.page !== page && !(page === 'account' && el.dataset.page === 'limits'); });
+  if (readsStopped && visible && !managementDenied) void refresh();
+  root.querySelectorAll('[data-page]').forEach(el => { el.hidden = el.dataset.page !== page; });
   root.querySelectorAll('nav [data-route]').forEach(el => {
     if (el.dataset.route === (page === 'usage' ? 'log' : 'overview')) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current');
   });
@@ -341,13 +328,9 @@ function route(value) {
 }
 
 if (!sdk?.app || !sdk?.theme || !sdk?.navigation?.get || !bridge) {
-  notice('请从 Studio 应用中心打开 Higgsfield。'); $('reload').disabled = true;
+  notice('请从 Studio 应用中心打开 Higgsfield。');
 } else {
-  const context = sdk.context.get();
-  const identity = [context.stationId, context.installationId, context.organizationId, context.userId].join(':');
-  try {
-    editor = createLimitsEditor(sdk, window.sessionStorage, `higgsfield-limits-v1:${identity}`);
-  } catch { text('saveState', '无法读取保存恢复记录。请检查浏览器会话存储；限额修改已禁用。'); }
+
   document.body.dataset.theme = sdk.theme.get();
   unsubscribe.push(sdk.theme.subscribe(theme => { document.body.dataset.theme = theme; }));
   unsubscribe.push(sdk.navigation.subscribe(route));
@@ -366,31 +349,12 @@ if (!sdk?.app || !sdk?.theme || !sdk?.navigation?.get || !bridge) {
       if (target.hasAttribute('data-video')) await sdk.capabilities.call('navigation.openApp', {appId: 'video-mcp-server', path: '/'});
     } catch (error) { failure(error, '无法打开目标页面，请确认应用已安装且当前身份有访问权限。'); }
   }, {signal: events.signal});
-  $('reload').onclick = () => { void refresh(); if (!root.querySelector('[data-page="usage"]').hidden) { if (logView === 'provider') void loadTransactions({snapshot:true}); else void loadUsage(); } };
   $('connect').onclick = () => { $('authorizationFlow').hidden = false; $('connect').setAttribute('aria-expanded', 'true'); $('flowTitle').focus({preventScroll: true}); size(); };
   $('copy').onclick = async () => {
     try { await navigator.clipboard.writeText($('authorizationRequest').value); text('copyState', '已复制，请交给本地 Skills 执行。'); }
     catch { $('authorizationRequest').focus(); $('authorizationRequest').select(); text('copyState', '已选中，请按 Ctrl+C 复制。'); }
   };
   $('check').onclick = () => { void startCheck(); };
-  for (const id of ['credits', 'submissions']) $(id).addEventListener('input', () => { dirty = true; updateEditor(); }, {signal: events.signal});
-  $('limitsForm').addEventListener('submit', async event => {
-    event.preventDefault();
-    if (composing) return;
-    if (!editor || !overview || !visible || disposed || editor.snapshot().busy) return;
-    const operation = editor.save(overview.limits, $('credits').value, Number($('submissions').value));
-    updateEditor();
-    try {
-      await operation;
-      if (disposed) return;
-      dirty = false; text('saveState', '设置已保存。'); await refresh();
-    } catch (error) {
-      if (disposed) return;
-      if (errorCode(error) === 'LIMITS_REVISION_CONFLICT') {
-        text('saveState', '设置已被其他操作更新。已保留填写值；请核对最新版本后再保存。'); await refresh();
-      } else { text('saveState', editor.snapshot().pending ? '结果尚未确认，请重试原保存请求。' : '保存未完成，请检查输入并重试。'); if (denied(error)) failure(error, ''); }
-    } finally { if (!disposed) updateEditor(); }
-  }, {signal: events.signal});
   $('accountRefresh').addEventListener('click', () => $('check').click(), {signal:events.signal});
   $('accountEdit').addEventListener('click', async () => {
     if (!account) return;
@@ -431,13 +395,13 @@ if (!sdk?.app || !sdk?.theme || !sdk?.navigation?.get || !bridge) {
     if (disposed) return;
     disposed = true; clearTimeout(timer); stopObservationTimer(); reader?.abort(); usageReader?.abort(); transactionsReader?.abort(); events.abort(); resize.disconnect();
     for (const stop of unsubscribe) stop();
-    for (const id of ['reload', 'connect', 'copy', 'check', 'usageFirst', 'usagePrevious', 'usageNext', 'transactionsReload', 'transactionsRefresh', 'transactionsFirst', 'transactionsPrevious', 'transactionsNext']) $(id).onclick = null;
+    for (const id of ['connect', 'copy', 'check', 'usageFirst', 'usagePrevious', 'usageNext', 'transactionsReload', 'transactionsRefresh', 'transactionsFirst', 'transactionsPrevious', 'transactionsNext']) $(id).onclick = null;
     $('business').hidden = true; overview = null; transactions = null;
   }
   unsubscribe.push(sdk.lifecycle.subscribe(event => {
     if (event === 'dispose') { dispose(); return; }
     if (event === 'hidden') { setVisible(false); ++readVersion; clearTimeout(timer); reader?.abort(); usageReader?.abort(); transactionsReader?.abort(); }
-    if (event === 'active') { setVisible(true); void refresh(true); route(sdk.navigation.get()); }
+    if (event === 'active') { setVisible(true); void refresh(); route(sdk.navigation.get()); }
   }));
   route(sdk.navigation.get()); updateEditor(); bridge.ready(); void refresh();
 }

@@ -89,3 +89,11 @@ test('v0.2 full-width layout, top breadcrumb, official brand logo and zero retur
   assert.doesNotMatch(index, /data-cancel|返回概览|>取消</);
 });
 
+
+test('team limits and global reload are absent from the account page',()=>{
+  const index = readFileSync(new URL('../dashboard/index.html',import.meta.url),'utf8');
+  assert.doesNotMatch(index,/id="(?:reload|limitsForm|budgetEnabled|credits|submissions)"/);
+  const f = fixture(()=>({status:200,data:{}}));
+  f.run('render()');
+  assert.equal(f.element('business').hidden,false);
+});

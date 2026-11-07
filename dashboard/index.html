@@ -9,7 +9,7 @@
   <button data-route="overview">概览</button><button data-route="log">日志</button>
 </nav>
 <div id="message" class="hf-notice" role="status">正在读取渠道状态…</div>
-<button id="reload" class="hf-button">重新读取</button>
+
 <div id="business" hidden>
 <section data-page="overview">
   <div class="hf-title-row"><div><h2>账号概览</h2><p id="accountCount" class="hf-muted">1 个账号</p></div><button class="hf-button primary" data-route="accounts/new">＋ 连接会员</button></div>
@@ -51,7 +51,7 @@
   <section id="authorizationFlow" class="hf-panel hf-spacing" hidden><h3 tabindex="-1" id="flowTitle">在本机完成会员授权</h3><ol class="hf-auth-flow">
     <li><span class="hf-step-number">1</span><div><h4>本地登录 Higgsfield</h4><p>将下面的请求交给本地自有 Skills，按官方浏览器页面完成登录。</p><label class="hf-field">给我的 Skills 的授权请求<textarea id="authorizationRequest" rows="4" readonly>请使用我的 verdantflare-video Skill，为当前团队的 Higgsfield 会员渠道完成本地登录与受控授权交接。先核对本地与服务器的 DMIT 出口一致，使用原绑定工作区；不要生成视频，不要显示或上传凭据到聊天，交接后检查服务器授权并保留现有停用和限额设置。</textarea></label><button id="copy" class="hf-button">复制授权请求</button><p id="copyState" role="status"></p></div></li>
     <li><span class="hf-step-number">2</span><div><h4>受控交接给服务器</h4><p>Skills 校验账号、工作区与授权版本后交接，服务器成为唯一刷新方。本机停止使用已交接的授权。</p></div></li>
-    <li><span class="hf-step-number">3</span><div><h4>确认连接结果</h4><p>交接完成后点击下方检查。成功连接不会自动提高限额或开启新增生成。</p></div></li>
+    <li><span class="hf-step-number">3</span><div><h4>确认连接结果</h4><p>交接完成后点击下方检查。成功连接不会自动启用已停用账号。</p></div></li>
   </ol></section>
   <div class="hf-title-actions hf-spacing"><button class="hf-button" id="check">检查授权与用量</button><span id="checkState" class="hf-caption" role="status"></span></div>
 </section>
@@ -71,8 +71,4 @@
   <div class="hf-title-actions hf-spacing"><button id="transactionsFirst" class="hf-button">最新一页</button><button id="transactionsPrevious" class="hf-button" disabled>上一页</button><span id="transactionsRange" class="hf-muted" role="status">尚未读取</span><button id="transactionsNext" class="hf-button" disabled>下一页</button></div>
   <p id="transactionsPagination" class="hf-muted hf-spacing"></p>
 </div></section>
-<section data-page="limits" hidden><h2>团队使用限额</h2><p class="hf-muted">按当前绑定累计；修改不会重置历史任务与用量。</p>
-  <form id="limitsForm" class="hf-panel hf-spacing"><div class="hf-form-grid"><label class="hf-field">累计消费上限 / Credits<input id="credits" inputmode="decimal" required pattern="(0|[1-9][0-9]{0,11})(\.[0-9]{1,6})?"></label><label class="hf-field">累计提交条数上限<input id="submissions" type="number" min="0" max="2147483647" step="1" required></label></div>
-  <dl class="hf-inline-facts"><div><dt>历史已提交</dt><dd id="submitted">—</dd></div><div><dt>历史报价预留</dt><dd id="limitsReserved">—</dd></div><div><dt>限额版本</dt><dd id="revision">—</dd></div></dl>
-  <div class="hf-notice">设为 0 即暂停新增，已有任务仍可读取。保存正数上限后仍需满足 Video 渠道开关与授权状态。</div><button id="save" class="hf-button primary" type="submit">保存设置</button><p id="saveState" role="status"></p></form>
-</section></div></main><script type="module" src="./dashboard.mjs"></script></body></html>
+</div></main><script type="module" src="./dashboard.mjs"></script></body></html>

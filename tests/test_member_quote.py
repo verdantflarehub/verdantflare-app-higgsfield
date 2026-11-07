@@ -27,11 +27,11 @@ class MemberQuoteTest(unittest.TestCase):
         self.assertFalse(any(call[:2] == ['generate','create'] for call in self.cli.calls))
         self.assertEqual(self.gateway.limits()['submitted_count'], 0)
 
-    def test_quote_blocks_budget_and_active_submission(self):
+    def test_quote_blocks_active_submission_regardless_of_legacy_budget(self):
         self.gateway.submit(request())
         self.assertEqual(self.gateway.cost(request().generation)['blocked_reason'], 'account_concurrency_exceeded')
         self.cli.cost = 3
-        self.assertEqual(self.gateway.cost(request().generation)['blocked_reason'], 'account_budget_exceeded')
+        self.assertEqual(self.gateway.cost(request().generation)['blocked_reason'], 'account_concurrency_exceeded')
 
     def test_price_increase_cannot_create_or_reserve(self):
         self.cli.cost = 3

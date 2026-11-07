@@ -98,21 +98,13 @@ class ManagementTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "independent_management_identity_required"):
             create_management_app(self.gateway, token=self.token, execution_token=self.token, station_id="station-test")
 
-    async def test_limits_conflict_and_idempotent_http_replay(self):
-        first = await self.client.put("/limits", json=self.change(), headers=self.headers())
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(first.json()["revision"], 2)
-        self.assertEqual(first.headers["cache-control"], "no-store")
-        replay = await self.client.put("/limits", json=self.change(), headers=self.headers())
-        self.assertEqual(replay.json(), first.json())
-        stale = self.change()
-        stale["operation_id"] = "second-operation"
-        response = await self.client.put("/limits", json=stale, headers=self.headers())
-        self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.json(), {"code": "LIMITS_REVISION_CONFLICT"})
-        overview = (await self.client.get("/overview", headers=self.headers())).json()
-        self.assertEqual(overview["generation_status"], "not_verified")
-        self.assertEqual(overview["video_channel_status"], "not_checked")
+    async def test_retired_limits_reject_writes_without_modifying_history(self):
+        before = self.gateway.limits()
+        for _ in range(2):
+            response = await self.client.put("/limits", json=self.change(), headers=self.headers())
+            self.assertEqual(response.status_code, 410)
+            self.assertEqual(response.json(), {"code": "TEAM_LIMITS_RETIRED"})
+        self.assertEqual(self.gateway.limits(), before)
         self.assertEqual(self.cli.calls, [])
 
     async def check(self):
@@ -192,7 +184,7 @@ class ManagementTest(unittest.IsolatedAsyncioTestCase):
                         '{"user_id":"pretend-admin"}', '{"x":"' + 'x' * 8192 + '"}']:
             response = await self.client.put("/limits", content=content,
                                               headers={**self.headers(), "Content-Type": "application/json"})
-            self.assertEqual(response.status_code, 422)
+            self.assertEqual(response.status_code, 410)
         response = await self.client.get("/authorization?role=admin", headers=self.headers())
         self.assertEqual(response.status_code, 422)
         self.assertEqual(self.gateway.limits()["revision"], 1)
@@ -232,17 +224,12 @@ class ManagementTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed["check_id"], auth["check_id"])
         self.assertEqual(failed["error_code"], "PROVIDER_TIMEOUT")
 
-    async def test_zero_credit_limit_pauses_even_a_zero_quote(self):
-        change = self.change()
-        change["credit_limit"] = "0"
-        await self.client.put("/limits", json=change, headers=self.headers())
+    async def test_zero_legacy_limits_do_not_pause_generation(self):
         overview = (await self.client.get("/overview", headers=self.headers())).json()
-        self.assertEqual(overview["generation_status"], "paused")
+        self.assertNotEqual(overview["generation_status"], "paused")
         self.cli.cost = 0
-        from higgsfield_gateway.jobs import GatewayError
-        with self.assertRaisesRegex(GatewayError, "account_budget_exceeded"):
-            await asyncio.to_thread(self.gateway.submit, request())
-        self.assertFalse(any(call[:2] == ["generate", "create"] for call in self.cli.calls))
+        result = await asyncio.to_thread(self.gateway.submit, request())
+        self.assertEqual(result["status"], "running")
 
     async def test_transactions_reject_invalid_provider_payload_without_losing_old_snapshot(self):
         await self.check()

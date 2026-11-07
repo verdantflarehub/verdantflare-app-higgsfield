@@ -407,8 +407,7 @@ def create_management_app(gateway, *, token, execution_token, station_id, assets
                                                     archive=request.method == 'DELETE')
             elif path == "/limits":
                 if request.method == "PUT":
-                    value = LimitUpdate.model_validate(await read_body(request))
-                    result = await run_in_threadpool(gateway.update_limits, value, **actor)
+                    raise GatewayError("team_limits_retired", 410)
                 else:
                     result = await run_in_threadpool(gateway.limits)
             elif path == "/authorization/check":

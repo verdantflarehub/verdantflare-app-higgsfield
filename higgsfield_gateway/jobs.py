@@ -120,9 +120,9 @@ class Gateway:
             value.update(submitted_count=len(jobs), reserved_credits=str(reserved),
                          active_count=len(active),
                          active_reserved_credits=str(sum((Decimal(str(job["quoted_credits"])) for job in active), Decimal(0))),
-                         budget_available=(self.channel_account.read(db)['status'] == 'active' and
-                                           Decimal(value["credit_limit"]) > 0 and len(jobs) < value["submission_limit"] and
-                                           reserved <= Decimal(value["credit_limit"])))
+                         # Legacy field now reflects account availability only.
+                         budget_available=self.channel_account.read(db)['status'] == 'active',
+                         enforcement='retired')
             return value
 
     def update_limits(self, change: LimitUpdate, *, user_id: str, organization_id: str, station_id: str):
@@ -307,14 +307,10 @@ class Gateway:
                 credits = self.quote(generation, path, self.reference_ids(generation))
             reason = None
             with self.db() as db:
-                limits = self._limits(db)
                 jobs = [json.loads(row[0]) for row in db.execute("SELECT record FROM jobs")]
                 active = [job for job in jobs if job["status"] not in {"completed", "failed"}]
                 if any(job["stage"] == "submission_unknown" for job in jobs):
                     reason = "account_reconciliation_required"
-                elif (Decimal(limits["credit_limit"]) == 0 or len(jobs) >= limits["submission_limit"] or
-                      sum((Decimal(str(job["quoted_credits"])) for job in jobs), Decimal(0)) + Decimal(str(credits)) > Decimal(limits["credit_limit"])):
-                    reason = "account_budget_exceeded"
                 elif len(active) >= self.max_concurrent:
                     reason = "account_concurrency_exceeded"
                 elif sum(job["quoted_credits"] for job in active) + credits > account["credits"]:
@@ -357,10 +353,6 @@ class Gateway:
                     jobs = [json.loads(row[0]) for row in db.execute("SELECT record FROM jobs")]
                     if any(job["stage"] == "submission_unknown" for job in jobs):
                         raise GatewayError("account_reconciliation_required")
-                    limits = self._limits(db)
-                    if (Decimal(limits["credit_limit"]) == 0 or len(jobs) >= limits["submission_limit"] or
-                            sum((Decimal(str(job["quoted_credits"])) for job in jobs), Decimal(0)) + Decimal(str(cost)) > Decimal(limits["credit_limit"])):
-                        raise GatewayError("account_budget_exceeded")
                     active = [job for job in jobs if job["status"] not in {"completed", "failed"}]
                     if len(active) >= self.max_concurrent:
                         raise GatewayError("account_concurrency_exceeded", 429)

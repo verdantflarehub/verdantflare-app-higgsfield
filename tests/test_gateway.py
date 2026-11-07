@@ -131,7 +131,7 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(other.status(request().request_id)["stage"], "submission_unknown")
         self.assertEqual(self.creates(), 1)
 
-    def test_concurrent_requests_obey_atomic_budget(self):
+    def test_concurrent_requests_ignore_retired_cumulative_budget(self):
         gateway = self.gateway
         gateway.update_limits(LimitUpdate(binding_id="team", revision=1, credit_limit="2",
                               submission_limit=2, operation_id="test-budget"),
@@ -143,13 +143,13 @@ class GatewayTest(unittest.TestCase):
                 return error.code
         with concurrent.futures.ThreadPoolExecutor(2) as pool:
             results = list(pool.map(submit, [1, 2]))
-        self.assertCountEqual(results, ["running", "account_budget_exceeded"])
-        self.assertEqual(self.creates(), 1)
+        self.assertCountEqual(results, ["running", "running"])
+        self.assertEqual(self.creates(), 2)
 
     def test_submission_count_is_independent_of_credit_balance(self):
         self.gateway.submit(request(1))
         self.gateway.submit(request(2))
-        with self.assertRaisesRegex(GatewayError, "account_budget_exceeded"):
+        with self.assertRaisesRegex(GatewayError, "account_concurrency_exceeded"):
             self.gateway.submit(request(3))
         self.assertEqual(self.creates(), 2)
 
@@ -184,13 +184,12 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(recovered["remote_id"], original["remote_id"])
         self.assertEqual(self.creates(), 1)
 
-    def test_zero_limits_disable_generation(self):
+    def test_zero_legacy_limits_do_not_disable_generation(self):
         self.gateway.update_limits(LimitUpdate(binding_id="team", revision=1, credit_limit="0",
                                    submission_limit=0, operation_id="test-pause"),
                                    user_id=USER, organization_id=ORG, station_id="station-test")
-        with self.assertRaisesRegex(GatewayError, "account_budget_exceeded"):
-            self.make_gateway(credit_limit=0, submission_limit=0).submit(request())
-        self.assertEqual(self.creates(), 0)
+        self.make_gateway(credit_limit=0, submission_limit=0).submit(request())
+        self.assertEqual(self.creates(), 1)
 
     def test_cli_proxy_cannot_be_overridden_by_environment(self):
         cli = CLI(Path("hf"), self.root)
